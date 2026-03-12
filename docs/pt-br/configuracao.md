@@ -14,11 +14,10 @@ O arquivo `.env` deve estar na raiz do projeto.
 ### Banco de Dados (PostgreSQL)
 - `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE`
 - `DB_SSL`: `true` para TLS (obrigatório em produção)
-- `DB_LOGGING`: `true` para logs SQL (opcional)
-- `DB_SYNCHRONIZE`: `true` para auto-sync (apenas dev)
 - `DB_POOL_MAX`: Máximo do pool de conexões. Padrão: `20`
+- `DATABASE_URL`: string de conexão opcional para ferramentas Drizzle (`db:generate`, `db:migrate`, `db:studio`)
 
-Em produção, `synchronize` é sempre `false`; use migrations.
+Em produção, o schema sync fica desabilitado; use apenas migrations do Drizzle.
 
 ### Autenticação (JWT RS256)
 - `PRIVATE_KEY`: Chave privada RSA em formato PEM (assina tokens)
@@ -48,3 +47,9 @@ O schema Joi em `src/config/validation.schema.ts`:
 - Exige `PRIVATE_KEY` e `PUBLIC_KEY` quando `NODE_ENV=production`
 - Exige `DB_SSL=true` em produção
 - Exige `ALLOWED_ORIGINS` em produção (formato de URLs)
+
+## Scripts Drizzle
+
+- `npm run db:generate` — gera arquivos de migration a partir do schema
+- `npm run db:migrate` — aplica migrations
+- `npm run db:studio` — abre o Drizzle Studio

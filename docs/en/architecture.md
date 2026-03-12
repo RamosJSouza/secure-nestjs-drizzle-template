@@ -33,7 +33,8 @@ src/
 ├── common/            # Guards, decorators
 ├── config/            # Environment validation (Joi)
 ├── logger/            # Pino, correlation ID middleware
-├── migrations/        # TypeORM migrations and seeds
+├── database/          # Drizzle database module and schema
+├── migrations/        # Seed scripts
 ├── modules/
 │   ├── audit/         # Audit log
 │   ├── health/        # Health checks
@@ -45,7 +46,13 @@ src/
 
 ## Design Decisions
 
-- **No schema sync in production** — Migrations only.
+- **No schema sync in production** — Drizzle migrations only.
 - **Fail-fast validation** — Joi schema validates on startup; production enforces required vars.
 - **Append-only audit** — No updates or deletes on audit records.
 - **Swagger exposed** — Intentional; facilitates integration and client generation.
+
+## Database Layer (Drizzle)
+
+- Runtime database access uses `DatabaseService` with `drizzle-orm` and `pg` pool.
+- Schema definitions live in `src/database/schema`.
+- SQL migrations are generated/applied via `drizzle-kit` using `drizzle.config.ts`.

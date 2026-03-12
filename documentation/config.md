@@ -18,11 +18,10 @@ O arquivo `.env` deve estar na raiz do projeto.
 - `DB_PASSWORD`: Senha.
 - `DB_DATABASE`: Nome do banco.
 - `DB_SSL`: `true` para TLS (obrigatório em produção).
-- `DB_LOGGING`: `true` para logs SQL (opcional).
-- `DB_SYNCHRONIZE`: `true` para auto-sync (apenas dev).
 - `DB_POOL_MAX`: Máximo de conexões no pool. Padrão: `20`.
+- `DATABASE_URL`: string de conexão opcional para o Drizzle Kit (`db:generate`, `db:migrate`, `db:studio`).
 
-> Em produção, `synchronize` é sempre `false`; use migrations.
+> Em produção, schema sync fica desabilitado; use apenas migrations.
 
 ### Autenticação (JWT RS256)
 - `PRIVATE_KEY`: Chave privada RSA em formato PEM (assinatura de tokens).
@@ -56,11 +55,18 @@ O schema Joi em `src/config/validation.schema.ts`:
 - Exige `DB_SSL=true` em produção.
 - Exige `ALLOWED_ORIGINS` em produção (formato de URLs).
 
+## Scripts de banco (Drizzle)
+
+- `npm run db:generate`: gera migrations com base no schema.
+- `npm run db:migrate`: aplica migrations no banco.
+- `npm run db:studio`: abre o Drizzle Studio.
+
 ## Uso no código
 
 ```typescript
 constructor(private configService: ConfigService) {}
 
 const port = this.configService.get<number>('port');
-const dbConfig = this.configService.get('database');
+const dbHost = this.configService.get<string>('DB_HOST');
+const dbName = this.configService.get<string>('DB_DATABASE');
 ```

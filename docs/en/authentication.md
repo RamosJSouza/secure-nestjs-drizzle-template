@@ -37,7 +37,8 @@ The system uses JWT with **RS256**. The private key (`PRIVATE_KEY`) signs tokens
 
 ### Password Change
 - `POST /auth/change-password` requires Bearer auth.
-- On password change, **all active sessions** for the user are revoked.
+- On password change, **all active (non-revoked) sessions** for the user are revoked.
+- Already revoked sessions keep their original `revoked_at` timestamp for audit integrity.
 - User must re-login on every device.
 
 ## Account Lockout

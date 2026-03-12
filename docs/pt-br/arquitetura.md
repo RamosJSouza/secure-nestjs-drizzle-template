@@ -33,7 +33,8 @@ src/
 ├── common/            # Guards, decorators
 ├── config/            # Validação de ambiente (Joi)
 ├── logger/            # Pino, middleware de correlation ID
-├── migrations/       # Migrations e seeds TypeORM
+├── database/          # Módulo de banco e schema Drizzle
+├── migrations/        # Scripts de seed
 ├── modules/
 │   ├── audit/        # Log de auditoria
 │   ├── health/       # Health checks
@@ -45,7 +46,13 @@ src/
 
 ## Decisões de Design
 
-- **Sem schema sync em produção** — Apenas migrations.
+- **Sem schema sync em produção** — Apenas migrations do Drizzle.
 - **Validação fail-fast** — Schema Joi valida na inicialização; produção exige variáveis obrigatórias.
 - **Auditoria append-only** — Sem updates ou deletes em registros de auditoria.
 - **Swagger exposto** — Intencional; facilita integração e geração de clientes.
+
+## Camada de Banco (Drizzle)
+
+- O acesso ao banco em runtime usa `DatabaseService` com `drizzle-orm` e pool `pg`.
+- Os schemas ficam em `src/database/schema`.
+- As migrations SQL são geradas/aplicadas com `drizzle-kit` via `drizzle.config.ts`.

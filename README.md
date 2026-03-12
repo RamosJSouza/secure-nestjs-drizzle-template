@@ -93,9 +93,9 @@ Technical references from Ramos da Informatica (replace/add links as needed):
 
 Placeholders to customize with your own authority content:
 
-- [NestJS Security Blueprint for SOC2](https://ramosdainformatica.com.br/<YOUR-NESTJS-SOC2-ARTICLE-SLUG>)
-- [JWT Rotation and Session Defense in Practice](https://ramosdainformatica.com.br/<YOUR-JWT-ROTATION-ARTICLE-SLUG>)
-- [RBAC Design Patterns for Enterprise SaaS](https://ramosdainformatica.com.br/<YOUR-RBAC-ARTICLE-SLUG>)
+- [NestJS Security Blueprint for SOC2](https://ramosdainformatica.com.br/nestjs-security-blueprint-arquitetura-de-backend-pronta-para-soc2/)
+- [JWT Rotation and Session Defense in Practice](https://ramosdainformatica.com.br/rotacao-de-jwt-e-defesa-de-sessao-na-pratica-com-nestjs/)
+
 
 ## Contribute or Hire Expert Help
 

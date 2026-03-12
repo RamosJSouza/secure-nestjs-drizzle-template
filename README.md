@@ -1,239 +1,115 @@
-# Prime Nest — Production-Grade Secure Backend Architecture (RBAC + JWT RS256 + Drizzle ORM)
+# NestJS Security Pro
 
-A reference NestJS backend architecture designed for regulated and security-sensitive environments — payments, healthcare, enterprise SaaS, and AI-driven systems where auditability and resilience are non-negotiable.
+[![Build Status](https://img.shields.io/github/actions/workflow/status/<OWNER>/<REPO>/ci.yml?branch=main&label=build)](https://github.com/<OWNER>/<REPO>/actions)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![Node Version](https://img.shields.io/badge/node-%3E%3D20.0.0-339933.svg)](https://nodejs.org/)
 
-**This is not a boilerplate.**  
-It is a security-first backend foundation shaped by real production constraints.
+Production-ready secure backend architecture with NestJS, Drizzle ORM, RBAC, and JWT RS256.
 
----
+## Why NestJS Security Pro
 
-## Built by
+Most templates help you ship fast.  
+**NestJS Security Pro helps you ship fast and pass security review.**
 
-**Ramos de Souza Janones**  
-Senior Full-Stack Engineer — Node.js | NestJS | Distributed Systems | LLMs in Production  
+It is designed for teams building SaaS, fintech, health, and enterprise products that must meet security and governance requirements such as:
 
-I design secure, scalable, audit-ready backend systems for regulated and high-risk domains.
+- SOC 2 readiness (traceability, access control, audit evidence)
+- GDPR-oriented controls (least privilege, event traceability, operational accountability)
+- Internal security review and incident response workflows
 
-- 🌐 [Website](https://ramosdainformatica.com.br/)
-- 💼 [LinkedIn](https://www.linkedin.com/in/ramos-souza/)
-- 💻 [GitHub](https://github.com/RamosJSouza)
+Instead of assembling auth, RBAC, logging, health checks, and database patterns from scratch, you start from a hardened baseline and save weeks of architecture work.
 
----
+## Value-Driven Features
 
-## Why This Architecture Exists
+- **Enterprise-Grade Auth (RS256 JWT)** - prevents shared-secret leakage risk with asymmetric keys.
+- **Refresh Token Rotation + Reuse Detection** - blocks replay attacks and revokes compromised session chains.
+- **Audit-Ready Session Revocation** - preserves `revoked_at` history for forensic integrity.
+- **Database-Driven RBAC** - avoids hardcoded roles and enables immediate permission changes without redeploy.
+- **Append-Only Audit Logging** - creates reliable evidence trails for compliance and incident analysis.
+- **Fail-Fast Configuration Validation** - stops insecure startup in production when critical env vars are missing.
+- **Secure-by-Default API Hardening** - includes rate limit, strict validation, Helmet, and CORS controls.
+- **Production Observability** - structured logs with correlation IDs, liveness/readiness probes, graceful shutdown.
+- **Drizzle ORM + Migration Workflow** - predictable schema evolution with explicit SQL migrations.
 
-Most backend templates optimize for speed.  
-This architecture optimizes for:
+## Architecture Snapshot
 
-- Security reviews
-- Compliance readiness
-- Auditability
-- Failure containment
-- Production resilience
-- Horizontal scalability
-
-It reflects patterns used in environments where:
-
-- Financial transactions cannot fail silently
-- Healthcare data must remain traceable
-- Authentication must resist token replay attacks
-- AI integrations require structured observability
-
----
-
-## Core Design Principles
-
-### 1. Asymmetric JWT (RS256)
-
-- Private key signs tokens (server only)
-- Public key verifies tokens (safe to distribute)
-- Prevents symmetric secret leakage risks
-- Compatible with distributed validation
-- Access token: 15 minutes
-- Refresh token: 7 days
-- Rotation with reuse detection enabled
-
-### 2. Refresh Token Rotation + Reuse Detection
-
-- If a compromised refresh token is reused:
-  - Entire session family is revoked
-  - Event is logged
-  - Incident becomes traceable
-- No silent compromise.
-
-### 3. Append-Only Audit Logging
-
-- Every mutation recorded
-- Correlation ID per request
-- No update/delete on audit records
-- Designed for traceability and forensic review
-
-### 4. Database-Driven RBAC
-
-- Feature → Permission → RolePermission → Role → User
-- Permissions stored in DB
-- No hardcoded roles
-- Changes take effect immediately
-- All mutations guarded
-
-### 5. Fail-Fast Configuration
-
-- Startup validation via Joi
-- Production refuses to boot without:
-  - `PRIVATE_KEY`
-  - `PUBLIC_KEY`
-  - `DB_SSL=true`
-  - `ALLOWED_ORIGINS` defined
-- No silent misconfiguration.
-
----
-
-## Security Model
-
-- Rate limiting: 100 req / 15 min per IP
-- Helmet security headers
-- Strict CORS (production required)
-- ValidationPipe (whitelist + forbidNonWhitelisted)
-- Account lockout: 5 attempts → 15-minute lock
-- Password change revokes all active sessions
-- No schema sync in production (migrations only)
-- Designed to pass internal security review.
-
----
-
-## Observability & Resilience
-
-- Structured logging with Pino
-- Correlation ID propagation
-- Liveness & Readiness endpoints
-- Docker health checks aligned with readiness
-- Graceful shutdown on SIGTERM
-- Connection pooling (configurable)
-- Horizontal scaling supported (stateless JWT)
-
----
-
-## Architecture Constraints
-
-- Single-tenant (Organization entity placeholder only)
-- Swagger intentionally exposed for integration workflows
-- Migrations only — no schema sync in production
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Framework | [NestJS](https://nestjs.com/) |
-| Database | PostgreSQL + [Drizzle ORM](https://orm.drizzle.team/) |
-| Cache | Redis |
-| Auth | JWT RS256 |
-| Validation | Class Validator + Joi |
-| Logging | Pino |
-| API Docs | Swagger |
-
----
-
-## Real-World Context Behind This Design
-
-This architecture reflects experience in:
-
-- Payment systems (including PIX-related flows)
-- Healthcare platforms
-- Stripe integrations
-- AI system refactoring
-- LLM + RAG pipelines in production
-
-When integrating AI into regulated systems, structured logs, correlation IDs, and audit trails stop being optional. They become operational requirements.
-
----
-
-## Documentation
-
-| Language | Links |
-|----------|-------|
-| **English** | [Architecture](docs/en/architecture.md) · [Authentication](docs/en/authentication.md) · [RBAC](docs/en/rbac.md) · [Configuration](docs/en/configuration.md) · [Observability](docs/en/observability.md) · [Security](docs/en/security.md) |
-| **Português** | [Arquitetura](docs/pt-br/arquitetura.md) · [Autenticação](docs/pt-br/autenticacao.md) · [RBAC](docs/pt-br/rbac.md) · [Configuração](docs/pt-br/configuracao.md) · [Observabilidade](docs/pt-br/observabilidade.md) · [Segurança](docs/pt-br/seguranca.md) |
-
-(See `/docs` directory)
-
----
+- **Framework:** NestJS
+- **Database:** PostgreSQL + Drizzle ORM
+- **Auth:** JWT RS256 (access 15m, refresh 7d)
+- **Authorization:** RBAC (`Feature -> Permission -> RolePermission -> Role -> User`)
+- **Cache/Infra:** Redis
+- **Observability:** Pino + correlation ID + health endpoints
 
 ## Quick Start
 
-1. Configure `.env`
-2. Generate RSA keys
-3. Run database migrations
-4. Seed RBAC
-5. Change admin credentials
-6. Start application
-
 ```bash
 cp .env.example .env
+npm install
 openssl genrsa -out private.pem 2048
 openssl rsa -in private.pem -pubout -out public.pem
-npm install
 npm run db:migrate
 npm run seed:rbac
 npm run dev
 ```
 
-### Database Tooling (Drizzle)
+Open API docs: `http://localhost:3000/api/docs`
 
-- `npm run db:generate` — generate SQL migration files from schema changes
-- `npm run db:migrate` — apply generated migrations
-- `npm run db:studio` — open Drizzle Studio
+### Database Commands (Drizzle)
 
-`drizzle.config.ts` supports both:
-- `DATABASE_URL` (preferred for tooling)
-- `DB_*` variables (fallback)
+```bash
+npm run db:generate   # generate migration from schema changes
+npm run db:migrate    # apply migrations
+npm run db:studio     # open Drizzle Studio
+```
 
-> **Important:** Change the seed admin password after first deploy.
+## Environment Essentials
 
----
+- Runtime DB: `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE`, `DB_SSL`
+- Drizzle tooling: `DATABASE_URL` (optional, preferred for CLI tooling)
+- Auth keys: `PRIVATE_KEY`, `PUBLIC_KEY`
+- Security: `ALLOWED_ORIGINS` (required in production)
 
-## For Engineering Leaders
+See full details in:
 
-This repository can be used as:
+- `docs/en/configuration.md`
+- `docs/pt-br/configuracao.md`
 
-- A secure backend reference implementation
-- An RBAC foundation
-- A JWT rotation example
-- An audit-ready architecture blueprint
-- A starting point for regulated SaaS systems
+## Compliance-Oriented Use Cases
 
----
+- Build an admin backend with permissioned operations and complete auditability.
+- Enforce secure token lifecycle with replay detection and controlled session invalidation.
+- Provide structured logs and trace IDs for incident response and security operations.
+- Establish a reusable backend baseline for regulated product teams.
 
-## Contact
+## 📚 Deep Dive & Tutorials
 
-If you are building or modernizing a backend that must survive:
+Technical references from Ramos da Informatica (replace/add links as needed):
 
-- Security review
-- Compliance audits
-- Production incidents
-- AI integration risks
+- [Security in Docker: Lessons from Real Incidents](https://ramosdainformatica.com.br/seguranca-em-docker-licoes-de-incidentes-reais/)
+- [How to Install and Configure SonarQube for Node.js Projects](https://ramosdainformatica.com.br/como-instalar-e-configurar-sonarqube-para-projetos-node-js/)
+- [Redis Performance with Relational Databases](https://ramosdainformatica.com.br/performance-em-aplicacoes-com-bancos-de-dados-relacionais-usando-redis/)
+- [Kubernetes Explained with Practical Diagrams](https://ramosdainformatica.com.br/kubernetes-explicado-com-diagramas-que-fazem-sentido/)
+- [Elasticsearch with Node.js: Practical Guide](https://ramosdainformatica.com.br/o-que-e-o-elasticsearch-e-como-instalar-e-utilizar-com-o-node/)
 
-Let's connect.
+Placeholders to customize with your own authority content:
 
-- 🌐 [https://ramosdainformatica.com.br/](https://ramosdainformatica.com.br/)
-- 💼 [https://www.linkedin.com/in/ramos-souza/](https://www.linkedin.com/in/ramos-souza/)
+- [NestJS Security Blueprint for SOC2](https://ramosdainformatica.com.br/<YOUR-NESTJS-SOC2-ARTICLE-SLUG>)
+- [JWT Rotation and Session Defense in Practice](https://ramosdainformatica.com.br/<YOUR-JWT-ROTATION-ARTICLE-SLUG>)
+- [RBAC Design Patterns for Enterprise SaaS](https://ramosdainformatica.com.br/<YOUR-RBAC-ARTICLE-SLUG>)
 
----
+## Contribute or Hire Expert Help
 
-## Navegação (Português)
+- **Contribute:** open issues, improve docs, add tests, or submit hardening improvements via PR.
+- **Consulting:** if your team needs secure architecture, compliance-focused backend design, or modernization support, reach out:
+  - Website: [ramosdainformatica.com.br](https://ramosdainformatica.com.br/)
+  - LinkedIn: [Ramos de Souza Janones](https://www.linkedin.com/in/ramos-souza/)
 
-| Seção | Descrição |
-|-------|-----------|
-| [Construído por](#built-by) | Autor e links de contato |
-| [Por que esta arquitetura existe](#why-this-architecture-exists) | Motivação e contexto |
-| [Princípios de design](#core-design-principles) | JWT RS256, rotação, auditoria, RBAC, fail-fast |
-| [Modelo de segurança](#security-model) | Rate limit, lockout, CORS, validação |
-| [Observabilidade e resiliência](#observability--resilience) | Pino, health checks, graceful shutdown |
-| [Restrições de arquitetura](#architecture-constraints) | Single-tenant, Swagger, migrations |
-| [Stack tecnológica](#tech-stack) | NestJS, PostgreSQL, Redis, JWT |
-| [Contexto real](#real-world-context-behind-this-design) | Pagamentos, healthcare, AI |
-| [Documentação](#documentation) | Links para docs em inglês e português |
-| [Quick Start](#quick-start) | Passos para rodar o projeto |
-| [Para líderes de engenharia](#for-engineering-leaders) | Casos de uso do repositório |
-| [Contato](#contact) | Website e LinkedIn |
+## Authority Note (PT-BR)
+
+Este projeto e sua arquitetura sao mantidos por **Ramos de Souza Janones**, engenheiro senior com foco em Node.js/NestJS, seguranca de aplicacoes e arquiteturas prontas para producao e auditoria.
+
+## Documentation
+
+- English docs: `docs/en/`
+- Portugues: `docs/pt-br/`
+- Legacy mirror: `documentation/`

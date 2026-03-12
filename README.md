@@ -1,4 +1,4 @@
-# Prime Nest — Production-Grade Secure Backend Architecture (RBAC + JWT RS256)
+# Prime Nest — Production-Grade Secure Backend Architecture (RBAC + JWT RS256 + Drizzle ORM)
 
 A reference NestJS backend architecture designed for regulated and security-sensitive environments — payments, healthcare, enterprise SaaS, and AI-driven systems where auditability and resilience are non-negotiable.
 
@@ -96,7 +96,7 @@ It reflects patterns used in environments where:
 - ValidationPipe (whitelist + forbidNonWhitelisted)
 - Account lockout: 5 attempts → 15-minute lock
 - Password change revokes all active sessions
-- `synchronize: false` in production
+- No schema sync in production (migrations only)
 - Designed to pass internal security review.
 
 ---
@@ -126,7 +126,7 @@ It reflects patterns used in environments where:
 | Layer | Technology |
 |-------|------------|
 | Framework | [NestJS](https://nestjs.com/) |
-| Database | PostgreSQL + [TypeORM](https://typeorm.io/) |
+| Database | PostgreSQL + [Drizzle ORM](https://orm.drizzle.team/) |
 | Cache | Redis |
 | Auth | JWT RS256 |
 | Validation | Class Validator + Joi |
@@ -164,7 +164,7 @@ When integrating AI into regulated systems, structured logs, correlation IDs, an
 
 1. Configure `.env`
 2. Generate RSA keys
-3. Run migrations
+3. Run database migrations
 4. Seed RBAC
 5. Change admin credentials
 6. Start application
@@ -173,11 +173,21 @@ When integrating AI into regulated systems, structured logs, correlation IDs, an
 cp .env.example .env
 openssl genrsa -out private.pem 2048
 openssl rsa -in private.pem -pubout -out public.pem
-yarn install
-yarn migration:run
-yarn seed:rbac
-yarn dev
+npm install
+npm run db:migrate
+npm run seed:rbac
+npm run dev
 ```
+
+### Database Tooling (Drizzle)
+
+- `npm run db:generate` — generate SQL migration files from schema changes
+- `npm run db:migrate` — apply generated migrations
+- `npm run db:studio` — open Drizzle Studio
+
+`drizzle.config.ts` supports both:
+- `DATABASE_URL` (preferred for tooling)
+- `DB_*` variables (fallback)
 
 > **Important:** Change the seed admin password after first deploy.
 

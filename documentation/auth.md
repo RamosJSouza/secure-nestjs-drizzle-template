@@ -39,7 +39,8 @@ O sistema usa JWT com algoritmo **RS256**. A chave privada (`PRIVATE_KEY`) assin
 
 ### Mudança de senha
 - `POST /auth/change-password` exige autenticação (Bearer).
-- Ao alterar a senha, **todas as sessões ativas** do usuário são revogadas.
+- Ao alterar a senha, **todas as sessões ativas (não revogadas)** do usuário são revogadas.
+- Sessões já revogadas preservam o timestamp original de `revoked_at` para manter a auditoria íntegra.
 - O usuário precisa fazer login novamente em cada dispositivo.
 
 ## Bloqueio de conta (lockout)

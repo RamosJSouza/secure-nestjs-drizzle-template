@@ -7,7 +7,8 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { createHash, timingSafeEqual } from 'crypto';
-import { compareSync, hashSync } from 'bcryptjs';
+import * as argon2 from 'argon2';
+import { compare as bcryptCompare } from 'bcryptjs';
 import { UsersService } from 'src/users/users.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -19,6 +20,13 @@ import { AuditLogService } from '@/modules/audit/audit-log.service';
 
 const ACCESS_TOKEN_EXPIRES = '15m';
 const REFRESH_TOKEN_EXPIRES = '7d';
+
+const ARGON2_OPTIONS: argon2.Options = {
+  type: argon2.argon2id,
+  memoryCost: 65536,  
+  timeCost: 3,
+  parallelism: 4,
+};
 
 @Injectable()
 export class AuthService {
@@ -39,6 +47,24 @@ export class AuthService {
     return createHash('sha256').update(token).digest('hex');
   }
 
+  /**
+   * Verify a password against its stored hash.
+   * Supports both Argon2id (new) and bcrypt (legacy migration path).
+   * If the stored hash is bcrypt, returns the plaintext so the caller can
+   * transparently re-hash it with Argon2id.
+   */
+  private async verifyPassword(
+    plaintext: string,
+    stored: string,
+  ): Promise<{ valid: boolean; needsRehash: boolean }> {
+    if (stored.startsWith('$argon2')) {
+      const valid = await argon2.verify(stored, plaintext);
+      return { valid, needsRehash: false };
+    }
+    const valid = await bcryptCompare(plaintext, stored);
+    return { valid, needsRehash: valid }; 
+  }
+
   private async revokeSessionFamilyAndLogReuse(
     reusedSession: Session,
     ip?: string,
@@ -53,7 +79,7 @@ export class AuthService {
       .where(eq(sessions.userId, userId));
 
     this.logger.warn(
-      `Refresh token reuse detected for user ${userId}, session ${reusedSession.id}. Revoked all sessions.`,
+      `Refresh token reuse detected for user ${userId}. Revoked ${sessionFamilyIds.length} sessions.`,
     );
 
     await this.auditLogService.log({
@@ -61,10 +87,7 @@ export class AuthService {
       entityType: 'Session',
       entityId: reusedSession.id,
       actorUserId: userId,
-      metadata: {
-        reusedSessionId: reusedSession.id,
-        sessionFamilyIds,
-      },
+      metadata: { sessionFamilyIds },
       ip: ip ?? undefined,
       userAgent: userAgent ?? undefined,
     });
@@ -125,23 +148,18 @@ export class AuthService {
   ): Promise<{ email: string; access_token: string; refresh_token: string }> {
     const user = await this.usersService.findOne(dto.email);
 
-    if (!user) {
+    if (!user || !user.isActive) {
       throw new UnauthorizedException('Invalid credentials');
-    }
-
-    if (!user.isActive) {
-      throw new UnauthorizedException('User account is deactivated');
     }
 
     const now = new Date();
     if (user.lockedUntil && user.lockedUntil > now) {
-      throw new UnauthorizedException(
-        `Account locked due to too many failed attempts. Try again after ${user.lockedUntil.toISOString()}`,
-      );
+      throw new UnauthorizedException('Invalid credentials');
     }
 
-    const isValid = compareSync(dto.password, user.password);
-    if (!isValid) {
+    const { valid, needsRehash } = await this.verifyPassword(dto.password, user.password);
+
+    if (!valid) {
       const result = await this.usersService.recordFailedLogin(user.id);
       if (result.lockedUntil) {
         await this.auditLogService.log({
@@ -149,18 +167,25 @@ export class AuthService {
           entityType: 'User',
           entityId: user.id,
           actorUserId: null,
-          metadata: { email: user.email, failedAttempts: result.failedLoginAttempts },
+          metadata: { failedAttempts: result.failedLoginAttempts },
           ip: ip ?? undefined,
           userAgent: userAgent ?? undefined,
         });
-        throw new UnauthorizedException(
-          `Account locked due to too many failed attempts. Try again after ${result.lockedUntil.toISOString()}`,
-        );
       }
       throw new UnauthorizedException('Invalid credentials');
     }
 
     await this.usersService.resetFailedLogin(user.id);
+
+    if (needsRehash) {
+      argon2
+        .hash(dto.password, ARGON2_OPTIONS)
+        .then((newHash) => this.usersService.updatePassword(user.id, newHash))
+        .catch((err: Error) =>
+          this.logger.warn(`Argon2 rehash failed for user ${user.id}: ${err.message}`),
+        );
+    }
+
     return this.createTokensAndSession(user, ip, userAgent);
   }
 
@@ -211,10 +236,24 @@ export class AuthService {
 
     const user = sessionWithUser.user;
     if (!user.isActive) {
-      throw new UnauthorizedException('User account is deactivated');
+      throw new UnauthorizedException('Invalid refresh token');
     }
 
     return this.rotateSession(sessionWithUser, user, ip, userAgent);
+  }
+
+  async logout(userId: string, refreshToken: string): Promise<void> {
+    const tokenHash = this.hashRefreshToken(refreshToken);
+    await this.db
+      .update(sessions)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(sessions.userId, userId),
+          eq(sessions.refreshTokenHash, tokenHash),
+          isNull(sessions.revokedAt),
+        ),
+      );
   }
 
   private async createTokensAndSession(
@@ -302,7 +341,7 @@ export class AuthService {
       throw new ConflictException('User already exists');
     }
 
-    const hashedPassword = hashSync(dto.password, 10);
+    const hashedPassword = await argon2.hash(dto.password, ARGON2_OPTIONS);
 
     const user = await this.usersService.create({
       email: dto.email,
@@ -319,7 +358,7 @@ export class AuthService {
     ip?: string,
     userAgent?: string,
   ): Promise<{ userId: string }> {
-    const hashedPassword = hashSync(newPassword, 10);
+    const hashedPassword = await argon2.hash(newPassword, ARGON2_OPTIONS);
     await this.usersService.updatePassword(userId, hashedPassword);
 
     const revokedAt = new Date();

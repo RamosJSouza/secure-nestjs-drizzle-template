@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -12,6 +13,7 @@ import { GracefulShutdownModule } from './graceful-shutdown/graceful-shutdown.mo
 import { LoggerModule } from './logger/logger.module';
 import { ConfigModule } from '@nestjs/config';
 import { DatabaseModule } from './database/database.module';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import configuration from './config';
 import { validationSchema } from './config/validation.schema';
 
@@ -26,6 +28,18 @@ import { validationSchema } from './config/validation.schema';
         abortEarly: false,
       },
     }),
+    ThrottlerModule.forRoot([
+      {
+        name: 'default',
+        ttl: 60_000, 
+        limit: 120,  
+      },
+      {
+        name: 'auth',
+        ttl: 60_000,
+        limit: 5, 
+      },
+    ]),
     DatabaseModule,
     ScheduleModule.forRoot(),
     RbacModule,
@@ -37,6 +51,12 @@ import { validationSchema } from './config/validation.schema';
     UsersModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}

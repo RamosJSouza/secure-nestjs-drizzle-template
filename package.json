@@ -38,6 +38,8 @@
     "@nestjs/schedule": "6.1.1",
     "@nestjs/swagger": "11.2.6",
     "@nestjs/terminus": "^11.0.0",
+    "@nestjs/throttler": "^6.5.0",
+    "argon2": "^0.44.0",
     "bcryptjs": "^3.0.3",
     "cache-manager": "^7.2.8",
     "class-transformer": "^0.5.1",

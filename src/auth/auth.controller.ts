@@ -9,6 +9,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request } from 'express';
+import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -23,6 +24,7 @@ import {
   ApiBadRequestResponse,
   ApiUnauthorizedResponse,
   ApiForbiddenResponse,
+  ApiNoContentResponse,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from './strategy/jwt-auth.guard';
 import { PermissionGuard, RequirePermissions } from '@/common/guards/permission.guard';
@@ -35,6 +37,7 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ auth: { ttl: 60_000, limit: 5 } })
   @ApiOperation({
     summary: 'User login',
     description: 'Authenticates a user and returns access and refresh tokens.',
@@ -49,6 +52,7 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ auth: { ttl: 60_000, limit: 10 } })
   @ApiOperation({
     summary: 'Refresh access token',
     description: 'Exchanges a valid refresh token for new access and refresh tokens.',
@@ -61,10 +65,30 @@ export class AuthController {
     return this.authService.refresh(dto, ip, userAgent);
   }
 
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Logout',
+    description: 'Revokes the provided refresh token, invalidating the current session.',
+  })
+  @ApiNoContentResponse({ description: 'Session revoked successfully' })
+  @ApiUnauthorizedResponse({ description: 'Authentication required' })
+  async logout(
+    @Body() dto: RefreshDto,
+    @Req() req: Request & { user?: { id: string } },
+  ) {
+    const userId = req.user?.id;
+    if (!userId) throw new UnauthorizedException('User not authenticated');
+    await this.authService.logout(userId, dto.refresh_token);
+  }
+
   @Post('register')
   @UseGuards(JwtAuthGuard, PermissionGuard)
   @HttpCode(HttpStatus.CREATED)
   @ApiBearerAuth()
+  @SkipThrottle({ auth: true })
   @ApiTags('auth', 'Users')
   @ApiOperation({
     summary: 'Create user (admin only)',

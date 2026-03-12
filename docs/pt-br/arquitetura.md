@@ -8,7 +8,7 @@ O Prime Nest é um backend NestJS pronto para produção, com estrutura modular 
 
 | Módulo | Finalidade |
 |--------|------------|
-| AuthModule | Login, refresh, registro, alteração de senha |
+| AuthModule | Login, refresh, logout, registro, alteração de senha |
 | UsersModule | Gestão de usuários (criação via auth/register) |
 | RbacModule | Features, Permissions, Roles, RolePermissions |
 | OrganizationsModule | Entidade Organization (placeholder) |
@@ -16,6 +16,7 @@ O Prime Nest é um backend NestJS pronto para produção, com estrutura modular 
 | HealthModule | Probes de liveness e readiness |
 | GracefulShutdownModule | Encerramento controlado |
 | LoggerModule | Pino e Correlation ID |
+| ThrottlerModule | Rate limiting por endpoint (`@nestjs/throttler`) |
 
 ## Fluxo de Dados
 
@@ -49,10 +50,14 @@ src/
 - **Sem schema sync em produção** — Apenas migrations do Drizzle.
 - **Validação fail-fast** — Schema Joi valida na inicialização; produção exige variáveis obrigatórias.
 - **Auditoria append-only** — Sem updates ou deletes em registros de auditoria.
-- **Swagger exposto** — Intencional; facilita integração e geração de clientes.
+- **Swagger desabilitado em produção** — `NODE_ENV=production` impede o registro de `/api/docs`. Disponível apenas em desenvolvimento e teste.
+- **Rate limiting em duas camadas** — `express-rate-limit` para proteção ampla por IP; `@nestjs/throttler` para throttling fino por endpoint (especialmente rotas críticas de autenticação).
+- **Hash de senhas com Argon2id** — Substitui o bcrypt; migração transparente no primeiro login.
+- **Trust proxy habilitado** — Garante que os IPs reais dos clientes sejam usados no rate limiting e nos logs de auditoria quando implantado atrás de Nginx/ALB.
 
 ## Camada de Banco (Drizzle)
 
 - O acesso ao banco em runtime usa `DatabaseService` com `drizzle-orm` e pool `pg`.
 - Os schemas ficam em `src/database/schema`.
 - As migrations SQL são geradas/aplicadas com `drizzle-kit` via `drizzle.config.ts`.
+- Todas as queries de usuário filtram `deletedAt IS NULL` — usuários com soft-delete são completamente excluídos.

@@ -17,19 +17,31 @@ O sistema usa JWT com algoritmo **RS256**. A chave privada (`PRIVATE_KEY`) assin
 - `email`: E-mail do usuário.
 - `roleId`: ID da Role atribuída ao usuário.
 
+> **Nota de segurança:** O campo `password` é sempre removido do `req.user`. O hash da senha nunca fica disponível para controllers ou interceptors.
+
+## Hash de Senhas
+
+As senhas são protegidas com **Argon2id**. Hashes bcrypt legados no banco são verificados normalmente e reprocessados com Argon2id de forma transparente no próximo login bem-sucedido — sem ação do usuário.
+
 ## Fluxos
 
 ### Login
 1. Cliente envia email e senha em `POST /auth/login`.
-2. Servidor valida credenciais, verifica conta ativa e bloqueio.
-3. Em sucesso: retorna `access_token` e `refresh_token`.
-4. Refresh token é armazenado em sessão (hash SHA-256) com IP e User-Agent.
+2. Servidor valida credenciais. Todos os casos de falha retornam `"Invalid credentials"` (prevenção de enumeração de usuários).
+3. Verifica conta ativa (`isActive = true`) e não excluída (`deletedAt IS NULL`).
+4. Em sucesso: retorna `access_token` e `refresh_token`.
+5. Refresh token é armazenado em sessão (hash SHA-256) com IP e User-Agent.
 
 ### Refresh
 1. Cliente envia `refresh_token` em `POST /auth/refresh`.
 2. Servidor valida token (RS256) e sessão.
 3. Se a sessão foi revogada (ex.: reutilização detectada), todas as sessões do usuário são revogadas e retorna erro.
 4. Em sucesso: nova sessão é criada, sessão antiga é revogada; retorna novo par de tokens (rotação).
+
+### Logout
+1. Cliente envia `refresh_token` em `POST /auth/logout` com Bearer token válido.
+2. Servidor revoga a sessão correspondente ao hash daquele token.
+3. O access token permanece válido até seu TTL de 15 minutos (sem estado por design).
 
 ### Rotação e detecção de reutilização
 - Cada refresh invalida o token anterior (rotação).
@@ -48,6 +60,14 @@ O sistema usa JWT com algoritmo **RS256**. A chave privada (`PRIVATE_KEY`) assin
 - Após **5 tentativas de login falhas**, a conta é bloqueada por **15 minutos**.
 - O evento `auth.account.locked` é registrado no audit log.
 - Usuários desativados ou bloqueados recebem `401 Unauthorized`.
+
+## Rate Limiting nos endpoints de Auth
+
+| Rota | Limite por IP |
+|------|---------------|
+| `POST /auth/login` | **5 req/min** (limiter `auth`) |
+| `POST /auth/refresh` | **10 req/min** (limiter `auth`) |
+| Demais rotas | 120 req/min (limiter `default`) |
 
 ## Diagrama de sequência (login/register)
 
@@ -68,9 +88,10 @@ sequenceDiagram
 
 ## Endpoints
 
-| Método | Rota                | Auth       | Descrição                          |
-|--------|----------------------|------------|------------------------------------|
-| POST   | /auth/login          | Não        | Login                              |
-| POST   | /auth/refresh        | Não        | Trocar refresh por novos tokens    |
-| POST   | /auth/register       | Sim + perm | Criar usuário (users:create)       |
-| POST   | /auth/change-password| Sim        | Alterar senha do usuário autenticado |
+| Método | Rota                  | Auth          | Descrição                           |
+|--------|-----------------------|---------------|-------------------------------------|
+| POST   | /auth/login           | Não           | Login                               |
+| POST   | /auth/refresh         | Não           | Trocar refresh por novos tokens     |
+| POST   | /auth/logout          | Sim (Bearer)  | Revogar sessão atual                |
+| POST   | /auth/register        | Sim + perm    | Criar usuário (users:create)        |
+| POST   | /auth/change-password | Sim (Bearer)  | Alterar senha do usuário autenticado|

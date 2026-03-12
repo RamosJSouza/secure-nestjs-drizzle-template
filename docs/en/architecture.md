@@ -8,7 +8,7 @@ Prime Nest is a production-ready NestJS backend with a modular structure designe
 
 | Module | Purpose |
 |--------|---------|
-| AuthModule | Login, refresh, register, change-password |
+| AuthModule | Login, refresh, logout, register, change-password |
 | UsersModule | User management (creation via auth/register) |
 | RbacModule | Features, Permissions, Roles, RolePermissions |
 | OrganizationsModule | Organization entity (placeholder) |
@@ -16,6 +16,7 @@ Prime Nest is a production-ready NestJS backend with a modular structure designe
 | HealthModule | Liveness and readiness probes |
 | GracefulShutdownModule | Clean shutdown handling |
 | LoggerModule | Pino + Correlation ID |
+| ThrottlerModule | Per-endpoint rate limiting (`@nestjs/throttler`) |
 
 ## Data Flow
 
@@ -49,10 +50,14 @@ src/
 - **No schema sync in production** — Drizzle migrations only.
 - **Fail-fast validation** — Joi schema validates on startup; production enforces required vars.
 - **Append-only audit** — No updates or deletes on audit records.
-- **Swagger exposed** — Intentional; facilitates integration and client generation.
+- **Swagger disabled in production** — `NODE_ENV=production` prevents `/api/docs` from being registered. Available only in development and test environments.
+- **Two-layer rate limiting** — `express-rate-limit` for broad IP-level protection; `@nestjs/throttler` for fine-grained per-endpoint throttling (especially critical auth routes).
+- **Argon2id password hashing** — Replaces bcrypt; transparent migration on first login.
+- **Trust proxy enabled** — Ensures real client IPs are used for rate limiting and audit logs when deployed behind Nginx/ALB.
 
 ## Database Layer (Drizzle)
 
 - Runtime database access uses `DatabaseService` with `drizzle-orm` and `pg` pool.
 - Schema definitions live in `src/database/schema`.
 - SQL migrations are generated/applied via `drizzle-kit` using `drizzle.config.ts`.
+- All user queries filter `deletedAt IS NULL` — soft-deleted users are fully excluded.

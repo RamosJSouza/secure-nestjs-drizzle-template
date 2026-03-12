@@ -8,7 +8,7 @@ Production-ready secure backend architecture with NestJS, Drizzle ORM, RBAC, and
 
 ## Why NestJS Security Pro
 
-Most templates help you ship fast.  
+Most templates help you ship fast.
 **NestJS Security Pro helps you ship fast and pass security review.**
 
 It is designed for teams building SaaS, fintech, health, and enterprise products that must meet security and governance requirements such as:
@@ -21,23 +21,28 @@ Instead of assembling auth, RBAC, logging, health checks, and database patterns 
 
 ## Value-Driven Features
 
-- **Enterprise-Grade Auth (RS256 JWT)** - prevents shared-secret leakage risk with asymmetric keys.
-- **Refresh Token Rotation + Reuse Detection** - blocks replay attacks and revokes compromised session chains.
-- **Audit-Ready Session Revocation** - preserves `revoked_at` history for forensic integrity.
-- **Database-Driven RBAC** - avoids hardcoded roles and enables immediate permission changes without redeploy.
-- **Append-Only Audit Logging** - creates reliable evidence trails for compliance and incident analysis.
-- **Fail-Fast Configuration Validation** - stops insecure startup in production when critical env vars are missing.
-- **Secure-by-Default API Hardening** - includes rate limit, strict validation, Helmet, and CORS controls.
-- **Production Observability** - structured logs with correlation IDs, liveness/readiness probes, graceful shutdown.
-- **Drizzle ORM + Migration Workflow** - predictable schema evolution with explicit SQL migrations.
+- **Enterprise-Grade Auth (RS256 JWT)** — prevents shared-secret leakage risk with asymmetric keys.
+- **Argon2id Password Hashing** — winner of the Password Hashing Competition; transparent migration from bcrypt on first login.
+- **Refresh Token Rotation + Reuse Detection** — blocks replay attacks and revokes compromised session chains.
+- **Explicit Logout** — `POST /auth/logout` revokes the specific session without waiting for token expiry.
+- **Audit-Ready Session Revocation** — preserves `revoked_at` history for forensic integrity.
+- **Database-Driven RBAC** — avoids hardcoded roles and enables immediate permission changes without redeploy.
+- **Append-Only Audit Logging** — creates reliable evidence trails for compliance and incident analysis.
+- **Fail-Fast Configuration Validation** — stops insecure startup in production when critical env vars are missing.
+- **Two-Layer Rate Limiting** — global IP-level (`express-rate-limit`) + per-endpoint (`@nestjs/throttler`); login limited to 5 req/min per IP.
+- **Swagger Disabled in Production** — the API blueprint is never publicly exposed in `NODE_ENV=production`.
+- **Soft-Delete Auth Bypass Protection** — deleted users cannot authenticate; `remove()` sets `deletedAt` and `isActive = false` atomically.
+- **Production Observability** — structured logs with correlation IDs, liveness/readiness probes, graceful shutdown.
+- **Drizzle ORM + Migration Workflow** — predictable schema evolution with explicit SQL migrations.
 
 ## Architecture Snapshot
 
-- **Framework:** NestJS
+- **Framework:** NestJS 11
 - **Database:** PostgreSQL + Drizzle ORM
-- **Auth:** JWT RS256 (access 15m, refresh 7d)
+- **Auth:** JWT RS256 (access 15m, refresh 7d) · Argon2id hashing
 - **Authorization:** RBAC (`Feature -> Permission -> RolePermission -> Role -> User`)
 - **Cache/Infra:** Redis
+- **Rate Limiting:** express-rate-limit (IP-level) + @nestjs/throttler (per-endpoint)
 - **Observability:** Pino + correlation ID + health endpoints
 
 ## Quick Start
@@ -52,7 +57,7 @@ npm run seed:rbac
 npm run dev
 ```
 
-Open API docs: `http://localhost:3000/api/docs`
+Open API docs: `http://localhost:3000/api/docs` *(development only — disabled in production)*
 
 ### Database Commands (Drizzle)
 
@@ -67,12 +72,31 @@ npm run db:studio     # open Drizzle Studio
 - Runtime DB: `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE`, `DB_SSL`
 - Drizzle tooling: `DATABASE_URL` (optional, preferred for CLI tooling)
 - Auth keys: `PRIVATE_KEY`, `PUBLIC_KEY`
-- Security: `ALLOWED_ORIGINS` (required in production)
+- Security: `ALLOWED_ORIGINS` (required in production), `NODE_ENV`
 
 See full details in:
 
 - `docs/en/configuration.md`
 - `docs/pt-br/configuracao.md`
+
+## Security Hardening Summary
+
+| Control | Implementation |
+|---------|----------------|
+| Password hashing | Argon2id (64 MiB / 3t / 4p) |
+| Legacy hash migration | Transparent bcrypt → Argon2id on login |
+| Auth rate limit | 5 req/min per IP on `/auth/login` |
+| Refresh rate limit | 10 req/min per IP on `/auth/refresh` |
+| Global rate limit | 300 req/15min per IP |
+| Security headers | Helmet with CSP |
+| Swagger | Disabled in `NODE_ENV=production` |
+| CORS | Parsed, sanitized; required in production |
+| Trust proxy | Configured for real-IP rate limiting |
+| UUID validation | `ParseUUIDPipe` on all route params |
+| Password policy | Min 8, max 72, uppercase+lowercase+digit |
+| User enumeration | Uniform error for all login failures |
+| Soft-delete bypass | `deletedAt` + `isActive` set atomically |
+| Password in req.user | Stripped in `JwtStrategy.validate()` |
 
 ## Compliance-Oriented Use Cases
 

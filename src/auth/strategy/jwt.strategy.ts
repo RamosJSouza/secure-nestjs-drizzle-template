@@ -22,21 +22,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   async validate(payload: { sub: string; email: string; roleId?: string }) {
     const user = await this.usersService.findOne(payload.email);
 
-    if (!user) {
+    if (!user || !user.isActive) {
       throw new UnauthorizedException('Invalid token');
     }
-
-    if (!user.isActive) {
-      throw new UnauthorizedException('User account is deactivated');
-    }
-
-    RequestContext.setUser(user.id);
 
     const now = new Date();
     if (user.lockedUntil && user.lockedUntil > now) {
       throw new UnauthorizedException('Account is locked. Try again later.');
     }
 
-    return user;
+    RequestContext.setUser(user.id);
+
+    const { password: _password, ...safeUser } = user;
+    return safeUser;
   }
 }

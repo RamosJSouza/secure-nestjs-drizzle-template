@@ -15,11 +15,34 @@ async function bootstrap() {
 
   try {
     const configService = app.get(ConfigService);
+    const nodeEnv = configService.get<string>('NODE_ENV', 'development');
 
-    app.use(helmet());
+    app.getHttpAdapter().getInstance().set('trust proxy', 1);
+
+    app.use(
+      helmet({
+        contentSecurityPolicy: {
+          directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"], 
+            imgSrc: ["'self'", 'data:'],
+          },
+        },
+        crossOriginEmbedderPolicy: nodeEnv === 'production',
+      }),
+    );
+
+    const originsRaw = configService.get<string>('ALLOWED_ORIGINS', '');
+    const parsedOrigins = originsRaw
+      .split(',')
+      .map((o) => o.trim())
+      .filter(Boolean);
+    const corsOrigin: string[] | boolean =
+      parsedOrigins.length > 0 ? parsedOrigins : nodeEnv !== 'production';
 
     app.enableCors({
-      origin: configService.get('ALLOWED_ORIGINS', '').split(','), // Ex: https://admin.example.com
+      origin: corsOrigin,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
       credentials: true,
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Correlation-Id'],
@@ -28,10 +51,11 @@ async function bootstrap() {
     app.use(
       rateLimit({
         windowMs: 15 * 60 * 1000,
-        max: 100,
+        max: 300,
         standardHeaders: true,
         legacyHeaders: false,
         message: 'Too many requests from this IP, please try again after 15 minutes',
+        skip: (req) => req.path === '/health/liveness' || req.path === '/health/readiness',
       }),
     );
 
@@ -46,26 +70,30 @@ async function bootstrap() {
       }),
     );
 
-    const config = new DocumentBuilder()
-      .setTitle('Admin Limify API')
-      .setDescription('Enterprise RBAC Administration System')
-      .setVersion('1.0.0')
-      .addBearerAuth()
-      .addTag('auth')
-      .addTag('Users')
-      .addTag('Roles')
-      .addTag('Features')
-      .build();
+    if (nodeEnv !== 'production') {
+      const config = new DocumentBuilder()
+        .setTitle('Admin Limify API')
+        .setDescription('Enterprise RBAC Administration System')
+        .setVersion('1.0.0')
+        .addBearerAuth()
+        .addTag('auth')
+        .addTag('Users')
+        .addTag('Roles')
+        .addTag('Features')
+        .build();
 
-    const document = SwaggerModule.createDocument(app, config);
-    SwaggerModule.setup('api/docs', app, document);
+      const document = SwaggerModule.createDocument(app, config);
+      SwaggerModule.setup('api/docs', app, document);
+    }
 
     const port = configService.get<number>('port') ?? configService.get<number>('PORT') ?? 3000;
     await app.listen(port);
 
     const logger = app.get(Logger);
     logger.log(`Application is running on: http://localhost:${port}`, 'Bootstrap');
-    logger.log(`Swagger Documentation: http://localhost:${port}/api/docs`, 'Bootstrap');
+    if (nodeEnv !== 'production') {
+      logger.log(`Swagger Documentation: http://localhost:${port}/api/docs`, 'Bootstrap');
+    }
   } catch (error) {
     const logger = app.get(Logger);
     logger.error(

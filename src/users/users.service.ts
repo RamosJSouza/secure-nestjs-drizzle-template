@@ -1,11 +1,24 @@
 import { Injectable } from '@nestjs/common';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { DatabaseService } from '@/database/database.service';
 import { users, User } from '@/database/schema/users.schema';
 import { CreateUserDto } from './dto/create-user.dto';
 
 const LOCKOUT_THRESHOLD = 5;
-const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000; 
+
+const SAFE_FIELDS = {
+  id: users.id,
+  email: users.email,
+  name: users.name,
+  roleId: users.roleId,
+  isActive: users.isActive,
+  failedLoginAttempts: users.failedLoginAttempts,
+  lockedUntil: users.lockedUntil,
+  createdAt: users.createdAt,
+  updatedAt: users.updatedAt,
+  deletedAt: users.deletedAt,
+};
 
 @Injectable()
 export class UsersService {
@@ -24,24 +37,32 @@ export class UsersService {
     return user;
   }
 
-  async findAll(): Promise<User[]> {
-    return this.dbService.db.select().from(users);
+  async findAll(): Promise<Omit<User, 'password'>[]> {
+    return this.dbService.db
+      .select(SAFE_FIELDS)
+      .from(users)
+      .where(isNull(users.deletedAt));
   }
 
+  /**
+   * Find an active, non-deleted user by email.
+   * Returns the full row (including password hash) for auth verification only.
+   * Callers outside of auth flows must NOT expose this object to clients.
+   */
   async findOne(email: string): Promise<User | undefined> {
     const [user] = await this.dbService.db
       .select()
       .from(users)
-      .where(eq(users.email, email))
+      .where(and(eq(users.email, email), isNull(users.deletedAt)))
       .limit(1);
     return user;
   }
 
-  async findById(id: string): Promise<User | undefined> {
+  async findById(id: string): Promise<Omit<User, 'password'> | undefined> {
     const [user] = await this.dbService.db
-      .select()
+      .select(SAFE_FIELDS)
       .from(users)
-      .where(eq(users.id, id))
+      .where(and(eq(users.id, id), isNull(users.deletedAt)))
       .limit(1);
     return user;
   }
@@ -98,7 +119,7 @@ export class UsersService {
   async remove(id: string): Promise<void> {
     await this.dbService.db
       .update(users)
-      .set({ deletedAt: new Date() })
+      .set({ deletedAt: new Date(), isActive: false })
       .where(eq(users.id, id));
   }
 }

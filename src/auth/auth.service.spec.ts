@@ -6,6 +6,12 @@ import { UsersService } from 'src/users/users.service';
 import { AuditLogService } from '@/modules/audit/audit-log.service';
 import { DatabaseService } from '@/database/database.service';
 
+jest.mock('argon2', () => ({
+  argon2id: 2,
+  hash: jest.fn().mockResolvedValue('$argon2id$v=19$mock-hash'),
+  verify: jest.fn().mockResolvedValue(true),
+}));
+
 describe('AuthService', () => {
   let service: AuthService;
   const TEST_LOGIN_CREDENTIAL = 'unit-test-credential-login';
@@ -71,12 +77,32 @@ describe('AuthService', () => {
   });
 
   describe('login', () => {
-    it('should return access token for valid credentials', async () => {
+    it('should return access token for valid credentials (argon2 hash)', async () => {
       const loginDto = { email: 'test@example.com', password: TEST_LOGIN_CREDENTIAL };
       const mockUser = {
         id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
         email: 'test@example.com',
-        password: '$2b$10$abcdefghijklmnopqrstuvwxyz',
+        password: '$argon2id$v=19$m=65536,t=3,p=4$mock',
+        name: 'Test User',
+        roleId: 'role-uuid',
+        isActive: true,
+        lockedUntil: null,
+      };
+
+      mockUsersService.findOne.mockResolvedValue(mockUser);
+
+      const result = await service.login(loginDto);
+
+      expect(result).toHaveProperty('access_token');
+      expect(result.email).toBe(loginDto.email);
+    });
+
+    it('should return access token for valid credentials (legacy bcrypt hash)', async () => {
+      const loginDto = { email: 'test@example.com', password: TEST_LOGIN_CREDENTIAL };
+      const mockUser = {
+        id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+        email: 'test@example.com',
+        password: '$2b$10$abcdefghijklmnopqrstuvwxyz0123456789012345678901234',
         name: 'Test User',
         roleId: 'role-uuid',
         isActive: true,
@@ -86,7 +112,7 @@ describe('AuthService', () => {
       mockUsersService.findOne.mockResolvedValue(mockUser);
 
       const bcryptjs = require('bcryptjs');
-      jest.spyOn(bcryptjs, 'compareSync').mockReturnValue(true);
+      jest.spyOn(bcryptjs, 'compare').mockResolvedValue(true);
 
       const result = await service.login(loginDto);
 
@@ -105,7 +131,7 @@ describe('AuthService', () => {
       mockUsersService.findOne.mockResolvedValue({
         id: 'uuid',
         email: 'test@example.com',
-        password: 'hash',
+        password: '$argon2id$mock',
         isActive: false,
         lockedUntil: null,
       });
@@ -115,10 +141,13 @@ describe('AuthService', () => {
     });
 
     it('should throw UnauthorizedException for invalid password', async () => {
+      const argon2 = require('argon2');
+      argon2.verify.mockResolvedValue(false);
+
       mockUsersService.findOne.mockResolvedValue({
         id: 'uuid',
         email: 'test@example.com',
-        password: 'hash',
+        password: '$argon2id$v=19$mock',
         isActive: true,
         lockedUntil: null,
       });
@@ -126,9 +155,6 @@ describe('AuthService', () => {
         failedLoginAttempts: 1,
         lockedUntil: null,
       });
-
-      const bcryptjs = require('bcryptjs');
-      jest.spyOn(bcryptjs, 'compareSync').mockReturnValue(false);
 
       await expect(service.login({ email: 'test@example.com', password: 'wrong' })).rejects.toThrow(
         UnauthorizedException,
@@ -145,9 +171,6 @@ describe('AuthService', () => {
       };
       mockUsersService.findOne.mockResolvedValue(null);
       mockUsersService.create.mockResolvedValue({ id: 'new-uuid', ...registerDto });
-
-      const bcryptjs = require('bcryptjs');
-      jest.spyOn(bcryptjs, 'hashSync').mockReturnValue('hashedpassword');
 
       const result = await service.register(registerDto);
 

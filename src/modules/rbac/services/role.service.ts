@@ -1,154 +1,158 @@
-import { Injectable, NotFoundException, ConflictException, Logger, BadRequestException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
-import { Role } from '../entities/role.entity';
-import { RolePermission } from '../entities/role-permission.entity';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  Logger,
+} from '@nestjs/common';
+import { eq, asc, count } from 'drizzle-orm';
+import { DatabaseService } from '@/database/database.service';
+import { roles, Role } from '@/database/schema/roles.schema';
+import { rolePermissions } from '@/database/schema/role-permissions.schema';
+import { users } from '@/database/schema/users.schema';
 import { CreateRoleDto, UpdateRoleDto, AssignPermissionsDto } from '../dto/role.dto';
 import { RbacService } from './rbac.service';
-import { User } from '../entities/user.entity';
 
 @Injectable()
 export class RoleService {
-    private readonly logger = new Logger(RoleService.name);
+  private readonly logger = new Logger(RoleService.name);
 
-    constructor(
-        @InjectRepository(Role)
-        private roleRepository: Repository<Role>,
-        @InjectRepository(RolePermission)
-        private rolePermissionRepository: Repository<RolePermission>,
-        @InjectRepository(User)
-        private userRepository: Repository<User>,
-        private rbacService: RbacService,
-        private dataSource: DataSource,
-    ) { }
+  constructor(
+    private readonly dbService: DatabaseService,
+    private rbacService: RbacService,
+  ) {}
 
-    async create(dto: CreateRoleDto): Promise<Role> {
-        const queryRunner = this.dataSource.createQueryRunner();
-        await queryRunner.connect();
-        await queryRunner.startTransaction();
+  private get db() {
+    return this.dbService.db;
+  }
 
-        try {
-            const existing = await queryRunner.manager.findOne(Role, {
-                where: { name: dto.name },
-            });
+  async create(dto: CreateRoleDto): Promise<Role> {
+    return this.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ id: roles.id })
+        .from(roles)
+        .where(eq(roles.name, dto.name))
+        .limit(1);
 
-            if (existing) {
-                throw new ConflictException(`Role "${dto.name}" already exists`);
-            }
+      if (existing) {
+        throw new ConflictException(`Role "${dto.name}" already exists`);
+      }
 
-            const role = queryRunner.manager.create(Role, dto);
-            const savedRole = await queryRunner.manager.save(Role, role);
+      const [role] = await tx.insert(roles).values(dto).returning();
+      this.logger.log(`Created new role: ${role.id}`);
+      return role;
+    });
+  }
 
-            await queryRunner.commitTransaction();
-            this.logger.log(`Created new role: ${savedRole.id}`);
-            return savedRole;
-        } catch (err) {
-            await queryRunner.rollbackTransaction();
-            this.logger.error(`Failed to create role: ${err.message}`, err.stack);
-            throw err;
-        } finally {
-            await queryRunner.release();
-        }
+  async findAll(): Promise<Role[]> {
+    return this.db.query.roles.findMany({
+      with: {
+        rolePermissions: {
+          with: {
+            permission: {
+              with: { feature: true },
+            },
+          },
+        },
+      },
+      orderBy: asc(roles.name),
+    });
+  }
+
+  async findOne(id: string): Promise<Role> {
+    const role = await this.db.query.roles.findFirst({
+      with: {
+        rolePermissions: {
+          with: {
+            permission: {
+              with: { feature: true },
+            },
+          },
+        },
+      },
+      where: eq(roles.id, id),
+    });
+
+    if (!role) {
+      throw new NotFoundException(`Role with ID "${id}" not found`);
     }
 
-    async findAll(): Promise<Role[]> {
-        return this.roleRepository.find({
-            relations: ['rolePermissions', 'rolePermissions.permission', 'rolePermissions.permission.feature'],
-            order: { name: 'ASC' },
-            cache: true
-        });
+    return role;
+  }
+
+  async update(id: string, dto: UpdateRoleDto): Promise<Role> {
+    await this.findOne(id);
+
+    if (dto.name) {
+      const [existing] = await this.db
+        .select({ id: roles.id })
+        .from(roles)
+        .where(eq(roles.name, dto.name))
+        .limit(1);
+
+      if (existing && existing.id !== id) {
+        throw new ConflictException(`Role with name "${dto.name}" already exists`);
+      }
     }
 
-    async findOne(id: string): Promise<Role> {
-        const role = await this.roleRepository.findOne({
-            where: { id },
-            relations: ['rolePermissions', 'rolePermissions.permission', 'rolePermissions.permission.feature'],
-        });
+    const [updated] = await this.db
+      .update(roles)
+      .set({ ...dto, updatedAt: new Date() })
+      .where(eq(roles.id, id))
+      .returning();
 
-        if (!role) {
-            throw new NotFoundException(`Role with ID "${id}" not found`);
-        }
-
-        return role;
+    if (dto.isActive !== undefined) {
+      await this.rbacService.invalidateRoleCache(id);
     }
 
-    async update(id: string, dto: UpdateRoleDto): Promise<Role> {
-        const role = await this.findOne(id);
+    this.logger.log(`Updated role ${id}`);
+    return updated;
+  }
 
-        if (dto.name && dto.name !== role.name) {
-            const existing = await this.roleRepository.findOne({
-                where: { name: dto.name },
-                select: { id: true }
-            });
+  async remove(id: string): Promise<void> {
+    await this.findOne(id);
 
-            if (existing) {
-                throw new ConflictException(`Role with name "${dto.name}" already exists`);
-            }
-        }
+    const [{ value: userCount }] = await this.db
+      .select({ value: count() })
+      .from(users)
+      .where(eq(users.roleId, id));
 
-        Object.assign(role, dto);
-        const updated = await this.roleRepository.save(role);
-
-        if (dto.isActive !== undefined) {
-            await this.rbacService.invalidateRoleCache(id);
-        }
-
-        this.logger.log(`Updated role ${id}`);
-        return updated;
+    if (userCount > 0) {
+      this.logger.warn(`Attempt to delete role ${id} with ${userCount} users`);
+      throw new ConflictException(`Cannot delete role with ${userCount} users assigned`);
     }
 
-    async remove(id: string): Promise<void> {
-        const role = await this.findOne(id);
+    await this.db.delete(roles).where(eq(roles.id, id));
+    await this.rbacService.invalidateRoleCache(id);
+    this.logger.log(`Deleted role ${id}`);
+  }
 
-        const userCount = await this.userRepository.count({ where: { roleId: id } });
+  async assignPermissions(
+    roleId: string,
+    dto: AssignPermissionsDto,
+    currentUserId?: string,
+  ): Promise<void> {
+    await this.findOne(roleId);
 
-        if (userCount > 0) {
-            this.logger.warn(`Attempt to delete role ${id} with ${userCount} users`);
-            throw new ConflictException(`Cannot delete role with ${userCount} users assigned`);
-        }
+    await this.db.transaction(async (tx) => {
+      await tx.delete(rolePermissions).where(eq(rolePermissions.roleId, roleId));
 
-        await this.roleRepository.remove(role);
-        await this.rbacService.invalidateRoleCache(id);
-        this.logger.log(`Deleted role ${id}`);
-    }
+      const uniquePermissions = [...new Set(dto.permissionIds)];
 
-    async assignPermissions(roleId: string, dto: AssignPermissionsDto, currentUserId?: string): Promise<void> {
-        const role = await this.findOne(roleId);
+      if (uniquePermissions.length > 0) {
+        await tx.insert(rolePermissions).values(
+          uniquePermissions.map((permissionId) => ({
+            roleId,
+            permissionId,
+            granted: true,
+          })),
+        );
+      }
+    });
 
-        if (role.name === 'Super Admin') {
-            // In a real system, you might restrict this even further
-        }
+    await this.rbacService.invalidateRoleCache(roleId);
 
-        const queryRunner = this.dataSource.createQueryRunner();
-        await queryRunner.connect();
-        await queryRunner.startTransaction('SERIALIZABLE');
-
-        try {
-            await queryRunner.manager.delete(RolePermission, { roleId });
-
-            const uniquePermissions = [...new Set(dto.permissionIds)];
-
-            const newPermissions = uniquePermissions.map(permissionId =>
-                queryRunner.manager.create(RolePermission, {
-                    roleId,
-                    permissionId,
-                    granted: true
-                })
-            );
-
-            await queryRunner.manager.save(RolePermission, newPermissions);
-
-            await queryRunner.commitTransaction();
-
-            await this.rbacService.invalidateRoleCache(roleId);
-
-            this.logger.log(`Assigned ${newPermissions.length} permissions to role ${roleId} by user ${currentUserId || 'system'}`);
-        } catch (err) {
-            await queryRunner.rollbackTransaction();
-            this.logger.error(`Failed to assign permissions: ${err.message}`, err.stack);
-            throw err;
-        } finally {
-            await queryRunner.release();
-        }
-    }
+    this.logger.log(
+      `Assigned ${dto.permissionIds.length} permissions to role ${roleId} by user ${currentUserId || 'system'}`,
+    );
+  }
 }

@@ -1,91 +1,106 @@
-import { Injectable, NotFoundException, ConflictException, Logger, PreconditionFailedException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
-import { Feature } from '../entities/feature.entity';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  Logger,
+} from '@nestjs/common';
+import { eq, ilike, or, and, desc, count } from 'drizzle-orm';
+import { DatabaseService } from '@/database/database.service';
+import { features, Feature } from '@/database/schema/features.schema';
 import { CreateFeatureDto, UpdateFeatureDto, QueryFeatureDto } from '../dto/feature.dto';
 
 @Injectable()
 export class FeatureService {
-    private readonly logger = new Logger(FeatureService.name);
+  private readonly logger = new Logger(FeatureService.name);
 
-    constructor(
-        @InjectRepository(Feature)
-        private featureRepository: Repository<Feature>,
-        private dataSource: DataSource,
-    ) { }
+  constructor(private readonly dbService: DatabaseService) {}
 
-    async create(dto: CreateFeatureDto): Promise<Feature> {
-        this.logger.debug(`Creating feature: ${dto.key}`);
+  private get db() {
+    return this.dbService.db;
+  }
 
-        try {
-            const feature = this.featureRepository.create(dto);
-            return await this.featureRepository.save(feature);
-        } catch (err) {
-            if (err.code === '23505') {
-                throw new ConflictException(`Feature with key "${dto.key}" already exists`);
-            }
-            throw err;
-        }
+  async create(dto: CreateFeatureDto): Promise<Feature> {
+    this.logger.debug(`Creating feature: ${dto.key}`);
+    try {
+      const [feature] = await this.db.insert(features).values(dto).returning();
+      return feature;
+    } catch (err) {
+      if (err.code === '23505') {
+        throw new ConflictException(`Feature with key "${dto.key}" already exists`);
+      }
+      throw err;
+    }
+  }
+
+  async findAll(query: QueryFeatureDto): Promise<{ data: Feature[]; total: number }> {
+    const { page = 1, limit = 10, search, isActive } = query;
+    const offset = (page - 1) * limit;
+
+    const conditions = [];
+
+    if (search) {
+      conditions.push(
+        or(ilike(features.name, `%${search}%`), ilike(features.key, `%${search}%`)),
+      );
     }
 
-    async findAll(query: QueryFeatureDto): Promise<{ data: Feature[]; total: number }> {
-        const { page = 1, limit = 10, search, isActive } = query;
-
-        const qb = this.featureRepository.createQueryBuilder('feature');
-
-        if (search) {
-            qb.where('feature.name ILIKE :search OR feature.key ILIKE :search', {
-                search: `%${search}%`,
-            });
-        }
-
-        if (isActive !== undefined) {
-            qb.andWhere('feature.isActive = :isActive', { isActive });
-        }
-
-        qb.leftJoinAndSelect('feature.permissions', 'permissions');
-        qb.orderBy('feature.createdAt', 'DESC');
-
-        const offset = (page - 1) * limit;
-        qb.skip(offset).take(limit);
-
-        const [data, total] = await qb.getManyAndCount();
-
-        return { data, total };
+    if (isActive !== undefined) {
+      conditions.push(eq(features.isActive, isActive));
     }
 
-    async findOne(id: string): Promise<Feature> {
-        const feature = await this.featureRepository.findOne({
-            where: { id },
-            relations: ['permissions'],
-            cache: 60000
-        });
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
 
-        if (!feature) {
-            throw new NotFoundException(`Feature with ID "${id}" not found`);
-        }
+    const [data, [{ value: total }]] = await Promise.all([
+      this.db.query.features.findMany({
+        with: { permissions: true },
+        where,
+        orderBy: desc(features.createdAt),
+        limit,
+        offset,
+      }),
+      this.db.select({ value: count() }).from(features).where(where),
+    ]);
 
-        return feature;
+    return { data, total };
+  }
+
+  async findOne(id: string): Promise<Feature> {
+    const feature = await this.db.query.features.findFirst({
+      with: { permissions: true },
+      where: eq(features.id, id),
+    });
+
+    if (!feature) {
+      throw new NotFoundException(`Feature with ID "${id}" not found`);
     }
 
-    async update(id: string, dto: UpdateFeatureDto): Promise<Feature> {
-        const result = await this.featureRepository.update(id, dto);
+    return feature;
+  }
 
-        if (result.affected === 0) {
-            throw new NotFoundException(`Feature ${id} not found`);
-        }
+  async update(id: string, dto: UpdateFeatureDto): Promise<Feature> {
+    const [updated] = await this.db
+      .update(features)
+      .set({ ...dto, updatedAt: new Date() })
+      .where(eq(features.id, id))
+      .returning({ id: features.id });
 
-        return this.findOne(id);
+    if (!updated) {
+      throw new NotFoundException(`Feature ${id} not found`);
     }
 
-    async remove(id: string): Promise<void> {
-        try {
-            await this.featureRepository.delete(id);
-        } catch (err) {
-            if (err.code === '23503') {
-                throw new ConflictException('Cannot delete feature with existing permissions assigned to roles');
-            }
-            throw err;
-        }
+    return this.findOne(id);
+  }
+
+  async remove(id: string): Promise<void> {
+    try {
+      await this.db.delete(features).where(eq(features.id, id));
+    } catch (err) {
+      if (err.code === '23503') {
+        throw new ConflictException(
+          'Cannot delete feature with existing permissions assigned to roles',
+        );
+      }
+      throw err;
     }
+  }
 }

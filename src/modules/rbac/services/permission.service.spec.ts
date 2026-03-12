@@ -1,62 +1,83 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { ConflictException } from '@nestjs/common';
 import { PermissionService } from './permission.service';
-import { Permission } from '../entities/permission.entity';
+import { DatabaseService } from '@/database/database.service';
 
 describe('PermissionService', () => {
-    let service: PermissionService;
-    let mockPermissionRepo: any;
-    let mockDataSource: any;
+  let service: PermissionService;
 
-    beforeEach(async () => {
-        mockPermissionRepo = {
-            create: jest.fn(),
-            save: jest.fn(),
-            findOne: jest.fn(),
-            update: jest.fn(),
-            delete: jest.fn(),
-            find: jest.fn(),
-        };
+  const mockReturning = jest.fn();
+  const mockInsert = jest.fn().mockReturnThis();
+  const mockValues = jest.fn().mockReturnThis();
+  const mockDelete = jest.fn().mockReturnThis();
+  const mockWhere = jest.fn();
+  const mockUpdate = jest.fn().mockReturnThis();
+  const mockSet = jest.fn().mockReturnThis();
 
-        mockDataSource = {
-            createQueryRunner: jest.fn(),
-        };
+  const mockDb = {
+    insert: mockInsert,
+    values: mockValues,
+    returning: mockReturning,
+    delete: mockDelete,
+    where: mockWhere,
+    update: mockUpdate,
+    set: mockSet,
+    query: {
+      permissions: {
+        findMany: jest.fn(),
+        findFirst: jest.fn(),
+      },
+    },
+  };
 
-        const module: TestingModule = await Test.createTestingModule({
-            providers: [
-                PermissionService,
-                { provide: getRepositoryToken(Permission), useValue: mockPermissionRepo },
-                { provide: DataSource, useValue: mockDataSource },
-            ],
-        }).compile();
+  const mockDatabaseService = { db: mockDb };
 
-        service = module.get<PermissionService>(PermissionService);
-    });
+  beforeEach(async () => {
+    jest.clearAllMocks();
 
-    it('should create new permission', async () => {
-        const dto = { action: 'test:view', name: 'Test Permission', featureId: 'feature-1' };
-        mockPermissionRepo.create.mockReturnValue(dto);
-        mockPermissionRepo.save.mockResolvedValue({ id: '1', ...dto });
+    mockInsert.mockReturnValue({ values: mockValues });
+    mockValues.mockReturnValue({ returning: mockReturning });
+    mockDelete.mockReturnValue({ where: mockWhere });
+    mockUpdate.mockReturnValue({ set: mockSet });
+    mockSet.mockReturnValue({ where: mockWhere });
 
-        const result = await service.create(dto);
-        expect(result).toEqual({ id: '1', ...dto });
-    });
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        PermissionService,
+        { provide: DatabaseService, useValue: mockDatabaseService },
+      ],
+    }).compile();
 
-    it('should throw on duplicate permission', async () => {
-        const error = new Error('Duplicate entry');
-        (error as any).code = '23505';
+    service = module.get<PermissionService>(PermissionService);
+  });
 
-        mockPermissionRepo.save.mockRejectedValue(error);
-        await expect(service.create({ action: 'test:view', name: 'Duplicate', featureId: 'ft-1' })).rejects.toThrow();
-    });
+  it('should be defined', () => {
+    expect(service).toBeDefined();
+  });
 
-    it('should find permissions by feature', async () => {
-        const permissions = [{ id: '1', action: 'view' }, { id: '2', action: 'edit' }];
-        mockPermissionRepo.find.mockResolvedValue(permissions);
+  it('should create a new permission', async () => {
+    const dto = { action: 'view', name: 'View Permission', featureId: 'feature-1' };
+    mockReturning.mockResolvedValue([{ id: '1', ...dto }]);
 
-        const result = await service.findByFeature('feature-1');
-        expect(result).toHaveLength(2);
-        expect(mockPermissionRepo.find).toHaveBeenCalledWith(expect.objectContaining({ where: { featureId: 'feature-1' } }));
-    });
+    const result = await service.create(dto);
+    expect(result).toEqual({ id: '1', ...dto });
+  });
+
+  it('should throw ConflictException on duplicate permission', async () => {
+    const error = new Error('Unique constraint');
+    (error as any).code = '23505';
+    mockReturning.mockRejectedValue(error);
+
+    await expect(service.create({ action: 'view', name: 'Dup', featureId: 'ft-1' })).rejects.toThrow(
+      ConflictException,
+    );
+  });
+
+  it('should find permissions by feature', async () => {
+    const items = [{ id: '1', action: 'view' }, { id: '2', action: 'edit' }];
+    mockDb.query.permissions.findMany.mockResolvedValue(items);
+
+    const result = await service.findByFeature('feature-1');
+    expect(result).toHaveLength(2);
+  });
 });

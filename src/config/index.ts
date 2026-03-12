@@ -1,10 +1,6 @@
-import { DataSourceOptions } from 'typeorm';
-import { dataSourceOptions } from './database';
-
 interface iConfig {
   env: string;
   port: number;
-  database: DataSourceOptions;
   keys: {
     privateKey: string;
     publicKey: string;
@@ -18,5 +14,4 @@ export default (): Partial<iConfig> => ({
     privateKey: (process.env.PRIVATE_KEY || '').replace(/\\n/gm, '\n'),
     publicKey: (process.env.PUBLIC_KEY || '').replace(/\\n/gm, '\n'),
   },
-  database: dataSourceOptions,
 });

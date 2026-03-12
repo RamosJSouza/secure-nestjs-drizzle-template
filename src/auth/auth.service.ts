@@ -5,16 +5,16 @@ import {
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { createHash, timingSafeEqual } from 'crypto';
 import { compareSync, hashSync } from 'bcryptjs';
 import { UsersService } from 'src/users/users.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RefreshDto } from './dto/refresh.dto';
-import { Session } from '@/modules/auth/entities/session.entity';
-import { User } from '@/modules/rbac/entities/user.entity';
+import { DatabaseService } from '@/database/database.service';
+import { sessions, Session } from '@/database/schema/sessions.schema';
+import { users, User } from '@/database/schema/users.schema';
 import { AuditLogService } from '@/modules/audit/audit-log.service';
 
 const ACCESS_TOKEN_EXPIRES = '15m';
@@ -28,9 +28,12 @@ export class AuthService {
     private jwtService: JwtService,
     private usersService: UsersService,
     private auditLogService: AuditLogService,
-    @InjectRepository(Session)
-    private sessionRepository: Repository<Session>,
+    private dbService: DatabaseService,
   ) {}
+
+  private get db() {
+    return this.dbService.db;
+  }
 
   private hashRefreshToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
@@ -44,15 +47,13 @@ export class AuthService {
     const userId = reusedSession.userId;
     const sessionFamilyIds = await this.getSessionFamilyIds(reusedSession);
 
-    const result = await this.sessionRepository
-      .createQueryBuilder()
-      .update(Session)
-      .set({ revokedAt: () => 'NOW()' })
-      .where('user_id = :userId', { userId })
-      .execute();
+    await this.db
+      .update(sessions)
+      .set({ revokedAt: new Date() })
+      .where(eq(sessions.userId, userId));
 
     this.logger.warn(
-      `Refresh token reuse detected for user ${userId}, session ${reusedSession.id}. Revoked ${result.affected ?? 0} sessions.`,
+      `Refresh token reuse detected for user ${userId}, session ${reusedSession.id}. Revoked all sessions.`,
     );
 
     await this.auditLogService.log({
@@ -62,7 +63,6 @@ export class AuthService {
       actorUserId: userId,
       metadata: {
         reusedSessionId: reusedSession.id,
-        revokedSessionCount: result.affected ?? 0,
         sessionFamilyIds,
       },
       ip: ip ?? undefined,
@@ -74,22 +74,25 @@ export class AuthService {
     const ids: string[] = [session.id];
     const visited = new Set<string>([session.id]);
 
-    let current: Session | null = session;
-    while (current?.rotatedFromSessionId) {
-      const parent = await this.sessionRepository.findOne({
-        where: { id: current.rotatedFromSessionId },
-      });
+    let currentId: string | null = session.rotatedFromSessionId;
+    while (currentId) {
+      const [parent] = await this.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, currentId))
+        .limit(1);
       if (!parent || visited.has(parent.id)) break;
       ids.push(parent.id);
       visited.add(parent.id);
-      current = parent;
+      currentId = parent.rotatedFromSessionId;
     }
 
     let toVisit = [...ids];
     while (toVisit.length > 0) {
-      const children = await this.sessionRepository.find({
-        where: { rotatedFromSessionId: In(toVisit) },
-      });
+      const children = await this.db
+        .select()
+        .from(sessions)
+        .where(inArray(sessions.rotatedFromSessionId, toVisit));
       toVisit = [];
       for (const c of children) {
         if (!visited.has(c.id)) {
@@ -179,35 +182,39 @@ export class AuthService {
     }
 
     const tokenHash = this.hashRefreshToken(token);
-    const session = await this.sessionRepository.findOne({
-      where: { refreshTokenHash: tokenHash },
-      relations: ['user'],
+
+    const [sessionWithUser] = await this.db.query.sessions.findMany({
+      with: { user: true },
+      where: eq(sessions.refreshTokenHash, tokenHash),
+      limit: 1,
     });
 
-    if (!session) {
+    if (!sessionWithUser) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    if (!this.constantTimeCompare(tokenHash, session.refreshTokenHash)) {
+    if (!this.constantTimeCompare(tokenHash, sessionWithUser.refreshTokenHash)) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
     const now = new Date();
-    if (session.revokedAt) {
-      await this.revokeSessionFamilyAndLogReuse(session, ip, userAgent);
-      throw new UnauthorizedException('Refresh token reuse detected. All sessions have been revoked.');
+    if (sessionWithUser.revokedAt) {
+      await this.revokeSessionFamilyAndLogReuse(sessionWithUser, ip, userAgent);
+      throw new UnauthorizedException(
+        'Refresh token reuse detected. All sessions have been revoked.',
+      );
     }
 
-    if (session.expiresAt < now) {
+    if (sessionWithUser.expiresAt < now) {
       throw new UnauthorizedException('Refresh token expired');
     }
 
-    const user = session.user;
+    const user = sessionWithUser.user;
     if (!user.isActive) {
       throw new UnauthorizedException('User account is deactivated');
     }
 
-    return this.rotateSession(session, user, ip, userAgent);
+    return this.rotateSession(sessionWithUser, user, ip, userAgent);
   }
 
   private async createTokensAndSession(
@@ -215,14 +222,14 @@ export class AuthService {
     ip?: string,
     userAgent?: string,
   ): Promise<{ email: string; access_token: string; refresh_token: string }> {
-    const payload = { sub: user.id, email: user.email, roleId: user.roleId };
+    const tokenPayload = { sub: user.id, email: user.email, roleId: user.roleId };
 
-    const accessToken = this.jwtService.sign(payload, {
+    const accessToken = this.jwtService.sign(tokenPayload, {
       expiresIn: ACCESS_TOKEN_EXPIRES,
       algorithm: 'RS256',
     });
 
-    const refreshToken = this.jwtService.sign(payload, {
+    const refreshToken = this.jwtService.sign(tokenPayload, {
       expiresIn: REFRESH_TOKEN_EXPIRES,
       algorithm: 'RS256',
     });
@@ -231,14 +238,13 @@ export class AuthService {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
-    const session = this.sessionRepository.create({
+    await this.db.insert(sessions).values({
       userId: user.id,
       refreshTokenHash,
       ip: ip ?? null,
       userAgent: userAgent ?? null,
       expiresAt,
     });
-    await this.sessionRepository.save(session);
 
     return {
       email: user.email,
@@ -253,17 +259,19 @@ export class AuthService {
     ip?: string,
     userAgent?: string,
   ): Promise<{ email: string; access_token: string; refresh_token: string }> {
-    oldSession.revokedAt = new Date();
-    await this.sessionRepository.save(oldSession);
+    await this.db
+      .update(sessions)
+      .set({ revokedAt: new Date() })
+      .where(eq(sessions.id, oldSession.id));
 
-    const payload = { sub: user.id, email: user.email, roleId: user.roleId };
+    const tokenPayload = { sub: user.id, email: user.email, roleId: user.roleId };
 
-    const accessToken = this.jwtService.sign(payload, {
+    const accessToken = this.jwtService.sign(tokenPayload, {
       expiresIn: ACCESS_TOKEN_EXPIRES,
       algorithm: 'RS256',
     });
 
-    const refreshToken = this.jwtService.sign(payload, {
+    const refreshToken = this.jwtService.sign(tokenPayload, {
       expiresIn: REFRESH_TOKEN_EXPIRES,
       algorithm: 'RS256',
     });
@@ -272,7 +280,7 @@ export class AuthService {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
-    const newSession = this.sessionRepository.create({
+    await this.db.insert(sessions).values({
       userId: user.id,
       refreshTokenHash,
       ip: ip ?? null,
@@ -280,7 +288,6 @@ export class AuthService {
       expiresAt,
       rotatedFromSessionId: oldSession.id,
     });
-    await this.sessionRepository.save(newSession);
 
     return {
       email: user.email,
@@ -315,15 +322,17 @@ export class AuthService {
     const hashedPassword = hashSync(newPassword, 10);
     await this.usersService.updatePassword(userId, hashedPassword);
 
-    const result = await this.sessionRepository
-      .createQueryBuilder()
-      .update(Session)
-      .set({ revokedAt: () => 'NOW()' })
-      .where('user_id = :userId AND revoked_at IS NULL', { userId })
-      .execute();
+    const revokedAt = new Date();
+    const result = await this.db
+      .update(sessions)
+      .set({ revokedAt })
+      .where(
+        and(eq(sessions.userId, userId), isNull(sessions.revokedAt)),
+      )
+      .returning({ id: sessions.id });
 
     this.logger.log(
-      `Password changed for user ${userId}. Revoked ${result.affected ?? 0} active sessions.`,
+      `Password changed for user ${userId}. Revoked ${result.length} active sessions.`,
     );
 
     return { userId };

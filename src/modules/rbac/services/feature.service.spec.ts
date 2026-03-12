@@ -1,80 +1,112 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { FeatureService } from './feature.service';
-import { Feature } from '../entities/feature.entity';
+import { DatabaseService } from '@/database/database.service';
 
 describe('FeatureService', () => {
-    let service: FeatureService;
-    let mockFeatureRepo: any;
-    let mockDataSource: any;
+  let service: FeatureService;
 
-    beforeEach(async () => {
-        const mockQueryBuilder = {
-            where: jest.fn().mockReturnThis(),
-            andWhere: jest.fn().mockReturnThis(),
-            leftJoinAndSelect: jest.fn().mockReturnThis(),
-            orderBy: jest.fn().mockReturnThis(),
-            skip: jest.fn().mockReturnThis(),
-            take: jest.fn().mockReturnThis(),
-            getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
-        };
+  const mockReturning = jest.fn();
+  const mockInsert = jest.fn().mockReturnThis();
+  const mockValues = jest.fn().mockReturnThis();
+  const mockDelete = jest.fn().mockReturnThis();
+  const mockDeleteWhere = jest.fn();
+  const mockUpdateReturning = jest.fn();
+  const mockUpdate = jest.fn().mockReturnThis();
+  const mockSet = jest.fn().mockReturnThis();
+  const mockUpdateWhere = jest.fn().mockReturnValue({ returning: mockUpdateReturning });
+  const mockCountSelect = jest.fn().mockReturnThis();
+  const mockCountFrom = jest.fn().mockReturnThis();
+  const mockCountWhere = jest.fn();
 
-        mockFeatureRepo = {
-            create: jest.fn(),
-            save: jest.fn(),
-            findOne: jest.fn(),
-            update: jest.fn(),
-            delete: jest.fn(),
-            createQueryBuilder: jest.fn().mockReturnValue(mockQueryBuilder),
-        };
+  const mockDb = {
+    insert: mockInsert,
+    values: mockValues,
+    returning: mockReturning,
+    delete: mockDelete,
+    update: mockUpdate,
+    set: mockSet,
+    select: mockCountSelect,
+    from: mockCountFrom,
+    where: mockCountWhere,
+    query: {
+      features: {
+        findMany: jest.fn(),
+        findFirst: jest.fn(),
+      },
+    },
+  };
 
-        mockDataSource = {
-            createQueryRunner: jest.fn(),
-        };
+  const mockDatabaseService = { db: mockDb };
 
-        const module: TestingModule = await Test.createTestingModule({
-            providers: [
-                FeatureService,
-                { provide: getRepositoryToken(Feature), useValue: mockFeatureRepo },
-                { provide: DataSource, useValue: mockDataSource },
-            ],
-        }).compile();
+  beforeEach(async () => {
+    jest.clearAllMocks();
 
-        service = module.get<FeatureService>(FeatureService);
-    });
+    mockInsert.mockReturnValue({ values: mockValues });
+    mockValues.mockReturnValue({ returning: mockReturning });
+    mockDelete.mockReturnValue({ where: mockDeleteWhere });
+    mockUpdate.mockReturnValue({ set: mockSet });
+    mockSet.mockReturnValue({ where: mockUpdateWhere });
+    mockCountSelect.mockReturnValue({ from: mockCountFrom });
+    mockCountFrom.mockReturnValue({ where: mockCountWhere });
 
-    it('should create feature ensuring unique key', async () => {
-        const dto = { key: 'test', name: 'Test' };
-        mockFeatureRepo.create.mockReturnValue(dto);
-        mockFeatureRepo.save.mockResolvedValue({ id: '1', ...dto });
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        FeatureService,
+        { provide: DatabaseService, useValue: mockDatabaseService },
+      ],
+    }).compile();
 
-        const result = await service.create(dto);
-        expect(result).toEqual({ id: '1', ...dto });
-    });
+    service = module.get<FeatureService>(FeatureService);
+  });
 
-    it('should fail on duplicate key', async () => {
-        const error = new Error('Unique constraint');
-        (error as any).code = '23505';
+  it('should be defined', () => {
+    expect(service).toBeDefined();
+  });
 
-        mockFeatureRepo.save.mockRejectedValue(error);
-        await expect(service.create({ key: 'test', name: 'Test' })).rejects.toThrow();
-    });
+  it('should create a feature', async () => {
+    const dto = { key: 'test', name: 'Test' };
+    mockReturning.mockResolvedValue([{ id: '1', ...dto }]);
 
-    it('should calculate pagination correctly', async () => {
-        mockFeatureRepo.createQueryBuilder().getManyAndCount.mockResolvedValue([[], 0]);
+    const result = await service.create(dto as any);
+    expect(result).toEqual({ id: '1', ...dto });
+  });
 
-        await service.findAll({ page: 2, limit: 10 });
+  it('should throw ConflictException on duplicate key', async () => {
+    const error = new Error('Unique constraint');
+    (error as any).code = '23505';
+    mockReturning.mockRejectedValue(error);
 
-        expect(mockFeatureRepo.createQueryBuilder().skip).toHaveBeenCalledWith(10);
-        expect(mockFeatureRepo.createQueryBuilder().take).toHaveBeenCalledWith(10);
-    });
+    await expect(service.create({ key: 'test', name: 'Test' } as any)).rejects.toThrow(
+      ConflictException,
+    );
+  });
 
-    it('should throw error when deleting feature with dependencies', async () => {
-        const error = new Error('FK violation');
-        (error as any).code = '23503';
+  it('should return paginated results from findAll', async () => {
+    mockDb.query.features.findMany.mockResolvedValue([]);
+    mockCountWhere.mockResolvedValue([{ value: 0 }]);
 
-        mockFeatureRepo.delete.mockRejectedValue(error);
-        await expect(service.remove('1')).rejects.toThrow();
-    });
+    const result = await service.findAll({ page: 2, limit: 10 });
+
+    expect(result).toEqual({ data: [], total: 0 });
+    expect(mockDb.query.features.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 10, offset: 10 }),
+    );
+  });
+
+  it('should throw NotFoundException when updating non-existent feature', async () => {
+    mockUpdateReturning.mockResolvedValue([]);
+
+    await expect(service.update('non-existent', { name: 'New' } as any)).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('should throw ConflictException when deleting feature with dependencies', async () => {
+    const error = new Error('FK violation');
+    (error as any).code = '23503';
+    mockDeleteWhere.mockRejectedValue(error);
+
+    await expect(service.remove('1')).rejects.toThrow(ConflictException);
+  });
 });

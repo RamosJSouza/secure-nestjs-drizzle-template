@@ -10,8 +10,8 @@ import { AuditModule } from './modules/audit/audit.module';
 import { HealthModule } from './modules/health/health.module';
 import { GracefulShutdownModule } from './graceful-shutdown/graceful-shutdown.module';
 import { LoggerModule } from './logger/logger.module';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
+import { DatabaseModule } from './database/database.module';
 import configuration from './config';
 import { validationSchema } from './config/validation.schema';
 
@@ -26,11 +26,7 @@ import { validationSchema } from './config/validation.schema';
         abortEarly: false,
       },
     }),
-    TypeOrmModule.forRootAsync({
-      imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => configService.get('database'),
-      inject: [ConfigService],
-    }),
+    DatabaseModule,
     ScheduleModule.forRoot(),
     RbacModule,
     OrganizationsModule,

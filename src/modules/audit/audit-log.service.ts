@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { AuditLog } from './entities/audit-log.entity';
+import { DatabaseService } from '@/database/database.service';
+import { auditLogs } from '@/database/schema/audit-logs.schema';
 import { RequestContext } from '@/logger/request-context';
 
 export interface AuditLogEntry {
@@ -20,26 +19,22 @@ export interface AuditLogEntry {
 export class AuditLogService {
   private readonly logger = new Logger(AuditLogService.name);
 
-  constructor(
-    @InjectRepository(AuditLog)
-    private auditLogRepository: Repository<AuditLog>,
-  ) {}
+  constructor(private readonly dbService: DatabaseService) {}
 
   async log(entry: AuditLogEntry): Promise<void> {
     try {
       const correlationId = entry.correlationId ?? RequestContext.getCorrelationId();
-      const auditLog = this.auditLogRepository.create({
+      await this.dbService.db.insert(auditLogs).values({
         action: entry.action,
         entityType: entry.entityType,
-        entityId: entry.entityId,
-        actorUserId: entry.actorUserId ?? RequestContext.getUserId(),
-        organizationId: entry.organizationId ?? RequestContext.getOrganizationId(),
+        entityId: entry.entityId ?? null,
+        actorUserId: entry.actorUserId ?? RequestContext.getUserId() ?? null,
+        organizationId: entry.organizationId ?? RequestContext.getOrganizationId() ?? null,
         correlationId: correlationId ?? null,
         metadata: entry.metadata ?? {},
         ip: entry.ip ?? null,
         userAgent: entry.userAgent ?? null,
       });
-      await this.auditLogRepository.save(auditLog);
     } catch (error) {
       this.logger.error(
         `Failed to write audit log: ${entry.action} ${entry.entityType}`,

@@ -34,6 +34,37 @@ Existing bcrypt hashes in the database continue to work. On the first successful
 - RBAC enforced via `PermissionGuard` and `@RequirePermissions`.
 - Permission check is database-backed (`RolePermission`) rather than hardcoded.
 - UUID path parameters are validated with `ParseUUIDPipe` — invalid values return `400` before hitting the database.
+- `PermissionGuard` applied without `@RequirePermissions` emits a `WARN` log (route is RBAC-unprotected) but allows the request through — this is intentional fail-open behavior for routes protected by other means.
+- `403 Forbidden` responses never include the required permission name — prevents attackers from mapping the permission system via error responses.
+
+## Risk Engine
+
+Every successful login is scored by `RiskEngineService` using five signals queried in parallel:
+
+| Signal | Score contribution |
+|--------|--------------------|
+| New device (fingerprint not seen before) | +20 |
+| New IP on a known device | +10 |
+| IP failure rate 5–9 in last hour | +10 |
+| IP failure rate 10–14 in last hour | +20 |
+| IP failure rate ≥ 15 in last hour | +30 |
+| Account was locked in last 60 minutes | +20 |
+| Recent token reuse event | +50 |
+
+Risk levels and actions:
+
+| Score | Level | Action |
+|-------|-------|--------|
+| 0–29 | `low` | Login proceeds normally |
+| 30–59 | `medium` | Login proceeds; `security.risk.elevated_login` audit event logged |
+| 60–79 | `high` | Login proceeds; `security.risk.elevated_login` audit event logged |
+| 80+ | `critical` | **Login blocked (HTTP 403)**; all sessions revoked; all JTIs added to Redis blocklist; `security.risk.login_blocked` audit event logged |
+
+All signal detectors fail **open** (return 0 on error) — a Redis or DB outage does not block logins.
+
+## Password Change Protection
+
+`POST /auth/change-password` requires the caller to provide their **current password** alongside the new one. The current password is verified before any change is made. This prevents account takeover via a stolen access token — even with a valid Bearer token, the attacker cannot change the password without knowing the current one.
 
 ## Password Requirements
 

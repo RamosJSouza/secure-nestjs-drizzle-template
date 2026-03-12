@@ -34,6 +34,37 @@ Hashes bcrypt existentes no banco continuam funcionando. No primeiro login bem-s
 - RBAC aplicado via `PermissionGuard` e `@RequirePermissions`.
 - A verificação de permissão é baseada em banco (`RolePermission`), não hardcoded.
 - Parâmetros UUID de rota são validados com `ParseUUIDPipe` — valores inválidos retornam `400` antes de atingir o banco.
+- `PermissionGuard` aplicado sem `@RequirePermissions` emite log `WARN` (rota desprotegida pelo RBAC) mas permite a requisição — comportamento fail-open intencional para rotas protegidas por outros meios.
+- Respostas `403 Forbidden` nunca incluem o nome da permissão exigida — impede que atacantes mapeiem o sistema de permissões via respostas de erro.
+
+## Motor de Risco (Risk Engine)
+
+Cada login bem-sucedido é pontuado pelo `RiskEngineService` usando cinco sinais consultados em paralelo:
+
+| Sinal | Contribuição de pontuação |
+|-------|--------------------------|
+| Dispositivo novo (fingerprint nunca visto) | +20 |
+| IP novo em dispositivo conhecido | +10 |
+| Taxa de falhas por IP 5–9 na última hora | +10 |
+| Taxa de falhas por IP 10–14 na última hora | +20 |
+| Taxa de falhas por IP ≥ 15 na última hora | +30 |
+| Conta bloqueada nos últimos 60 minutos | +20 |
+| Evento recente de reutilização de token | +50 |
+
+Níveis de risco e ações:
+
+| Pontuação | Nível | Ação |
+|-----------|-------|------|
+| 0–29 | `low` | Login prossegue normalmente |
+| 30–59 | `medium` | Login prossegue; evento de auditoria `security.risk.elevated_login` registrado |
+| 60–79 | `high` | Login prossegue; evento de auditoria `security.risk.elevated_login` registrado |
+| 80+ | `critical` | **Login bloqueado (HTTP 403)**; todas as sessões revogadas; todos os JTIs adicionados à blocklist do Redis; evento `security.risk.login_blocked` registrado |
+
+Todos os detectores de sinal falham **abertos** (retornam 0 em caso de erro) — uma falha no Redis ou banco não bloqueia logins.
+
+## Proteção na Alteração de Senha
+
+`POST /auth/change-password` exige que o chamador forneça a **senha atual** junto com a nova senha. A senha atual é verificada antes de qualquer alteração. Isso previne tomada de conta via token de acesso roubado — mesmo com um Bearer token válido, o atacante não consegue trocar a senha sem conhecer a senha atual.
 
 ## Requisitos de Senha
 

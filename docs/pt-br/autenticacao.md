@@ -29,9 +29,10 @@ O sistema utiliza JWT com **RS256**. A chave privada (`PRIVATE_KEY`) assina os t
 3. Servidor valida credenciais — todos os casos de falha retornam a mesma mensagem `"Invalid credentials"` para evitar enumeração de usuários.
 4. Verifica `isActive = true` e `deletedAt IS NULL` (contas excluídas com soft-delete não conseguem fazer login).
 5. Tentativas de senha inválidas incrementam o contador de bloqueio por conta e o contador suspeito por IP.
-6. Em sucesso: limite de sessões é aplicado (máximo 10 por usuário — a mais antiga é removida com revogação de JTI se o limite for excedido).
-7. Um UUID `jti` único é embutido no access token e armazenado na linha da sessão.
-8. Retorna `access_token` (com JTI) e `refresh_token`. Fingerprint do dispositivo (SHA-256 de User-Agent + IP) armazenado na sessão.
+6. Em sucesso: o **Motor de Risco** pontua o login com base no fingerprint do dispositivo, histórico de IP e sinais de ameaça. Uma pontuação `critical` bloqueia o login e revoga todas as sessões imediatamente.
+7. Limite de sessões é aplicado (máximo 10 por usuário — a mais antiga é removida com revogação de JTI se o limite for excedido).
+8. Um UUID `jti` único é embutido no access token e armazenado na linha da sessão.
+9. Retorna `access_token` (com JTI) e `refresh_token`. Fingerprint do dispositivo (SHA-256 completo em hex de User-Agent + IP) armazenado na sessão.
 
 ### Refresh
 
@@ -68,6 +69,7 @@ Cada access token carrega um UUID `jti`. No logout, rotação de refresh ou troc
 ### Alteração de Senha
 
 - `POST /auth/change-password` exige autenticação Bearer.
+- O corpo da requisição deve incluir **`currentPassword`** — a senha atual é verificada antes de qualquer alteração. Isso previne tomada de conta se um access token for roubado.
 - Todos os JTIs das sessões ativas são coletados, depois todas as sessões são revogadas no banco.
 - Todos os JTIs coletados são adicionados à blocklist do Redis — **todos os access tokens são imediatamente inválidos**, não apenas após seu TTL.
 - Sessões já revogadas mantêm o `revoked_at` original para preservar a trilha de auditoria.
@@ -129,6 +131,8 @@ sequenceDiagram
   US-->>-AS: User
   AS->>AS: verifyPassword(plain, hash)
   Note over AS: Argon2id.verify() ou bcrypt.compare() legado
+  AS->>AS: riskEngine.assessLoginRisk(userId, fingerprint, ip)
+  Note over AS: Bloqueia com HTTP 403 se nível = critical
   AS->>AS: enforceSessionLimit(userId)
   Note over AS: Evicts oldest + revokes JTI if > 10 sessions
   AS->>AS: jti = randomUUID()

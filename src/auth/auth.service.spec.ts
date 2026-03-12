@@ -7,6 +7,7 @@ import { AuditLogService } from '@/modules/audit/audit-log.service';
 import { DatabaseService } from '@/database/database.service';
 import { TokenRevocationService } from '@/security/token-revocation/token-revocation.service';
 import { SuspiciousActivityService } from '@/security/detection/suspicious-activity.service';
+import { RiskEngineService } from '@/security/risk-engine/risk-engine.service';
 
 jest.mock('argon2', () => ({
   argon2id: 2,
@@ -58,6 +59,7 @@ describe('AuthService', () => {
 
   const mockUsersService = {
     findOne: jest.fn(),
+    findOneByIdForAuth: jest.fn(),
     create: jest.fn(),
     updatePassword: jest.fn().mockResolvedValue(undefined),
     recordFailedLogin: jest.fn(),
@@ -79,6 +81,10 @@ describe('AuthService', () => {
     recordFailedAttempt: jest.fn().mockResolvedValue(false),
   };
 
+  const mockRiskEngineService = {
+    assessLoginRisk: jest.fn().mockResolvedValue({ score: 0, level: 'low', signals: {} }),
+  };
+
   const mockDatabaseService = { db: mockDb };
 
   beforeEach(async () => {
@@ -94,6 +100,7 @@ describe('AuthService', () => {
         { provide: DatabaseService, useValue: mockDatabaseService },
         { provide: TokenRevocationService, useValue: mockTokenRevocationService },
         { provide: SuspiciousActivityService, useValue: mockSuspiciousActivityService },
+        { provide: RiskEngineService, useValue: mockRiskEngineService },
       ],
     }).compile();
 
@@ -211,6 +218,48 @@ describe('AuthService', () => {
       await expect(
         service.register({ email: 'existing@example.com', name: 'U', password: 'p' }),
       ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('changePassword', () => {
+    const USER_ID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    const mockUserWithPassword = {
+      id: USER_ID,
+      email: 'test@example.com',
+      password: '$argon2id$v=19$m=65536,t=3,p=4$mock',
+      isActive: true,
+    };
+
+    it('should throw UnauthorizedException when user is not found', async () => {
+      mockUsersService.findOneByIdForAuth.mockResolvedValue(null);
+
+      await expect(
+        service.changePassword(USER_ID, 'current-pass', 'New-Pass1'),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should throw UnauthorizedException when currentPassword is wrong', async () => {
+      const argon2 = require('argon2');
+      argon2.verify.mockResolvedValue(false);
+      mockUsersService.findOneByIdForAuth.mockResolvedValue(mockUserWithPassword);
+
+      await expect(
+        service.changePassword(USER_ID, 'wrong-current', 'New-Pass1'),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should change password and revoke all sessions on success', async () => {
+      const argon2 = require('argon2');
+      argon2.verify.mockResolvedValue(true);
+      mockUsersService.findOneByIdForAuth.mockResolvedValue(mockUserWithPassword);
+
+      const result = await service.changePassword(USER_ID, 'correct-current', 'New-Pass1');
+
+      expect(result).toEqual({ userId: USER_ID });
+      expect(mockUsersService.updatePassword).toHaveBeenCalledWith(USER_ID, '$argon2id$v=19$mock-hash');
+      expect(mockAuditLogService.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'auth.password.changed', entityId: USER_ID }),
+      );
     });
   });
 });

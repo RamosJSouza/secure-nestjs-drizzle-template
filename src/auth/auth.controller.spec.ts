@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { JwtAuthGuard } from './strategy/jwt-auth.guard';
+import { PermissionGuard } from '@/common/guards/permission.guard';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -20,7 +22,10 @@ describe('AuthController', () => {
           useValue: mockAuthService,
         },
       ],
-    }).compile();
+    })
+      .overrideGuard(JwtAuthGuard).useValue({ canActivate: () => true })
+      .overrideGuard(PermissionGuard).useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<AuthController>(AuthController);
     authService = module.get<AuthService>(AuthService);
@@ -48,9 +53,10 @@ describe('AuthController', () => {
 
       mockAuthService.login.mockResolvedValue(authResponse);
 
-      const result = await controller.login(loginDto);
+      const mockReq = { ip: '127.0.0.1', socket: {}, get: jest.fn().mockReturnValue('test-agent') } as any;
+      const result = await controller.login(loginDto, mockReq);
 
-      expect(mockAuthService.login).toHaveBeenCalledWith(loginDto);
+      expect(mockAuthService.login).toHaveBeenCalledWith(loginDto, '127.0.0.1', 'test-agent');
       expect(result).toEqual(authResponse);
     });
   });

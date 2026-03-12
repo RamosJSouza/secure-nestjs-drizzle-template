@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { createHash, timingSafeEqual } from 'crypto';
 import { compareSync, hashSync } from 'bcryptjs';
 import { UsersService } from 'src/users/users.service';
@@ -322,10 +322,13 @@ export class AuthService {
     const hashedPassword = hashSync(newPassword, 10);
     await this.usersService.updatePassword(userId, hashedPassword);
 
+    const revokedAt = new Date();
     const result = await this.db
       .update(sessions)
-      .set({ revokedAt: new Date() })
-      .where(eq(sessions.userId, userId))
+      .set({ revokedAt })
+      .where(
+        and(eq(sessions.userId, userId), isNull(sessions.revokedAt)),
+      )
       .returning({ id: sessions.id });
 
     this.logger.log(

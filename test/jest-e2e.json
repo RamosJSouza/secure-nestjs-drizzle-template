@@ -6,6 +6,7 @@
   "transform": {
     "^.+\\.ts$": "ts-jest"
   },
+  "setupFiles": ["dotenv/config"],
   "moduleNameMapper": {
     "^src/(.*)$": "<rootDir>/../src/$1",
     "^@/(.*)$": "<rootDir>/../src/$1",

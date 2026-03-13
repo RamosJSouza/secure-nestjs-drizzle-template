@@ -40,7 +40,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Account is locked. Try again later.');
     }
 
-    RequestContext.setUser(user.id);
+    RequestContext.setUser(user.id, user.organizationId ?? undefined);
 
     return user;
   }

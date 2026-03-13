@@ -35,7 +35,10 @@ In `.env`, paste PEM content as a single line, replacing newlines with `\n`. Bot
 - `ALLOWED_ORIGINS`: Comma-separated URLs (e.g. `https://admin.example.com`). **Required in production.**
 
 ### Redis
-- `REDIS_HOST`, `REDIS_PORT` (default: 6379)
+- `REDIS_HOST`: Default `localhost`
+- `REDIS_PORT`: Default `6379`
+- `REDIS_PASSWORD`: Optional
+- `DISABLE_REDIS`: Set to `true` to skip BullMQ initialization (webhook CRUD remains available; async delivery queue is disabled). Useful for local development without Redis.
 
 ### Email (Resend)
 - `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_FROM_NAME` (optional)

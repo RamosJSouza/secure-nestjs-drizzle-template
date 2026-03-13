@@ -12,6 +12,7 @@ const SAFE_FIELDS = {
   email: users.email,
   name: users.name,
   roleId: users.roleId,
+  organizationId: users.organizationId,
   isActive: users.isActive,
   failedLoginAttempts: users.failedLoginAttempts,
   lockedUntil: users.lockedUntil,

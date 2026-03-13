@@ -1,5 +1,6 @@
 import { pgTable, uuid, text, boolean, integer, timestamp, index } from 'drizzle-orm/pg-core';
 import { roles } from './roles.schema';
+import { organizations } from './organizations.schema';
 
 export const users = pgTable(
   'users',
@@ -9,6 +10,9 @@ export const users = pgTable(
     password: text('password').notNull(),
     name: text('name').notNull(),
     roleId: uuid('role_id').references(() => roles.id),
+    organizationId: uuid('organization_id').references(() => organizations.id, {
+      onDelete: 'set null',
+    }),
     isActive: boolean('is_active').notNull().default(true),
     failedLoginAttempts: integer('failed_login_attempts').notNull().default(0),
     lockedUntil: timestamp('locked_until'),

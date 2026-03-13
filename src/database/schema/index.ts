@@ -6,4 +6,6 @@ export * from './role-permissions.schema';
 export * from './sessions.schema';
 export * from './organizations.schema';
 export * from './audit-logs.schema';
+export * from './webhook-endpoints.schema';
+export * from './webhook-deliveries.schema';
 export * from './relations';

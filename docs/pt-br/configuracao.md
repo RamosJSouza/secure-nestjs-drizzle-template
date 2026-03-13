@@ -35,7 +35,10 @@ No `.env`, cole o conteúdo PEM em uma linha, substituindo quebras por `\n`. Amb
 - `ALLOWED_ORIGINS`: URLs separadas por vírgula (ex: `https://admin.example.com`). **Obrigatório em produção.**
 
 ### Redis
-- `REDIS_HOST`, `REDIS_PORT` (padrão: 6379)
+- `REDIS_HOST`: Padrão `localhost`
+- `REDIS_PORT`: Padrão `6379`
+- `REDIS_PASSWORD`: Opcional
+- `DISABLE_REDIS`: Defina como `true` para desabilitar a inicialização do BullMQ (o CRUD de webhooks permanece disponível; a fila de entrega assíncrona é desativada). Útil para desenvolvimento local sem Redis.
 
 ### E-mail (Resend)
 - `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_FROM_NAME` (opcional)

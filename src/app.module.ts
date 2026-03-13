@@ -11,12 +11,19 @@ import { AuditModule } from './modules/audit/audit.module';
 import { HealthModule } from './modules/health/health.module';
 import { GracefulShutdownModule } from './graceful-shutdown/graceful-shutdown.module';
 import { LoggerModule } from './logger/logger.module';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { DatabaseModule } from './database/database.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { SecurityModule } from './security/security.module';
+import { TenantModule } from './tenant/tenant.module';
+import { BullModule } from '@nestjs/bullmq';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+import { WebhookEndpointsModule } from './webhooks/webhook-endpoints.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
 import configuration from './config';
 import { validationSchema } from './config/validation.schema';
+
+const redisEnabled = process.env.DISABLE_REDIS !== 'true';
 
 @Module({
   imports: [
@@ -32,17 +39,35 @@ import { validationSchema } from './config/validation.schema';
     ThrottlerModule.forRoot([
       {
         name: 'default',
-        ttl: 60_000, 
-        limit: 120,  
+        ttl: 60_000,
+        limit: 120,
       },
       {
         name: 'auth',
         ttl: 60_000,
-        limit: 5, 
+        limit: 5,
       },
     ]),
     DatabaseModule,
     ScheduleModule.forRoot(),
+    EventEmitterModule.forRoot({ wildcard: true }),
+    ...(redisEnabled
+      ? [
+          BullModule.forRootAsync({
+            imports: [ConfigModule],
+            useFactory: (configService: ConfigService) => ({
+              connection: {
+                host: configService.get<string>('redis.host'),
+                port: configService.get<number>('redis.port'),
+                password: configService.get<string>('redis.password'),
+              },
+            }),
+            inject: [ConfigService],
+          }),
+          WebhooksModule,
+        ]
+      : [WebhookEndpointsModule]),
+    TenantModule,
     RbacModule,
     OrganizationsModule,
     AuditModule,

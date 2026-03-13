@@ -8,6 +8,7 @@ import { DatabaseService } from '@/database/database.service';
 import { TokenRevocationService } from '@/security/token-revocation/token-revocation.service';
 import { SuspiciousActivityService } from '@/security/detection/suspicious-activity.service';
 import { RiskEngineService } from '@/security/risk-engine/risk-engine.service';
+import { SecurityEventService } from '@/security/events/security-event.service';
 
 jest.mock('argon2', () => ({
   argon2id: 2,
@@ -23,7 +24,6 @@ describe('AuthService', () => {
   const mockInsertValues = jest.fn().mockResolvedValue(undefined);
   const mockInsert = jest.fn().mockReturnValue({ values: mockInsertValues });
 
-  // update().set().where() — supports both direct await and .returning()
   const mockUpdateReturning = jest.fn().mockResolvedValue([]);
   const mockUpdateWhere = jest.fn().mockReturnValue({
     then: (resolve: any, reject?: any) => Promise.resolve([]).then(resolve, reject),
@@ -32,9 +32,10 @@ describe('AuthService', () => {
   const mockUpdateSet = jest.fn().mockReturnValue({ where: mockUpdateWhere });
   const mockUpdate = jest.fn().mockReturnValue({ set: mockUpdateSet });
 
-  // select().from().where() — supports direct await and .orderBy()
+  const mockLimit = jest.fn().mockResolvedValue([]);
   const mockSelectWhereResult = {
     orderBy: jest.fn().mockResolvedValue([]),
+    limit: mockLimit,
     then: (resolve: any, reject?: any) => Promise.resolve([]).then(resolve, reject),
   };
   const mockSelectFromObj = { where: jest.fn().mockReturnValue(mockSelectWhereResult) };
@@ -59,6 +60,7 @@ describe('AuthService', () => {
 
   const mockUsersService = {
     findOne: jest.fn(),
+    findById: jest.fn(),
     findOneByIdForAuth: jest.fn(),
     create: jest.fn(),
     updatePassword: jest.fn().mockResolvedValue(undefined),
@@ -85,11 +87,18 @@ describe('AuthService', () => {
     assessLoginRisk: jest.fn().mockResolvedValue({ score: 0, level: 'low', signals: {} }),
   };
 
+  const mockSecurityEventService = {
+    loginFailed: jest.fn().mockResolvedValue(undefined),
+    sessionRevoked: jest.fn().mockResolvedValue(undefined),
+    sessionLimitEviction: jest.fn().mockResolvedValue(undefined),
+  };
+
   const mockDatabaseService = { db: mockDb };
 
   beforeEach(async () => {
     jest.clearAllMocks();
     mockInsert.mockReturnValue({ values: mockInsertValues });
+    mockLimit.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -101,6 +110,7 @@ describe('AuthService', () => {
         { provide: TokenRevocationService, useValue: mockTokenRevocationService },
         { provide: SuspiciousActivityService, useValue: mockSuspiciousActivityService },
         { provide: RiskEngineService, useValue: mockRiskEngineService },
+        { provide: SecurityEventService, useValue: mockSecurityEventService },
       ],
     }).compile();
 
@@ -194,6 +204,92 @@ describe('AuthService', () => {
       await expect(service.login({ email: 'test@example.com', password: 'wrong' })).rejects.toThrow(
         UnauthorizedException,
       );
+    });
+  });
+
+  describe('refresh', () => {
+    const VALID_SESSION_ID = 'session-uuid-old';
+    const USER_ID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    const futureDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const pastDate = new Date(Date.now() - 1000);
+
+    const claimedSession = {
+      id: VALID_SESSION_ID,
+      userId: USER_ID,
+      accessTokenJti: 'old-jti',
+      rotatedFromSessionId: null,
+      expiresAt: futureDate,
+      revokedAt: new Date(), 
+    };
+
+    const activeUser = {
+      id: USER_ID,
+      email: 'test@example.com',
+      isActive: true,
+      lockedUntil: null,
+    };
+
+    beforeEach(() => {
+      mockJwtService.verify.mockReturnValue({ sub: USER_ID, exp: Math.floor(futureDate.getTime() / 1000) });
+    });
+
+    it('should return new token pair on successful atomic claim', async () => {
+      mockUpdateReturning.mockResolvedValueOnce([claimedSession]);
+      mockUsersService.findById.mockResolvedValueOnce(activeUser);
+
+      const result = await service.refresh({ refresh_token: 'valid-token' });
+
+      expect(result).toHaveProperty('access_token');
+      expect(result).toHaveProperty('refresh_token');
+      expect(result.email).toBe('test@example.com');
+      expect(mockTokenRevocationService.revokeToken).toHaveBeenCalled();
+    });
+
+    it('should throw and revoke all sessions on token reuse', async () => {
+      const revokedSession = { ...claimedSession, revokedAt: new Date(Date.now() - 5000) };
+      mockUpdateReturning.mockResolvedValueOnce([]); 
+      mockLimit.mockResolvedValueOnce([revokedSession]); 
+      mockUpdateReturning.mockResolvedValueOnce([]); 
+
+      await expect(
+        service.refresh({ refresh_token: 'reused-token' }),
+      ).rejects.toThrow('Refresh token reuse detected');
+    });
+
+    it('should throw UnauthorizedException when token is not found', async () => {
+      mockUpdateReturning.mockResolvedValueOnce([]); 
+      mockLimit.mockResolvedValueOnce([]); 
+
+      await expect(
+        service.refresh({ refresh_token: 'unknown-token' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should throw UnauthorizedException when JWT signature is invalid', async () => {
+      mockJwtService.verify.mockImplementationOnce(() => {
+        throw new Error('invalid signature');
+      });
+
+      await expect(
+        service.refresh({ refresh_token: 'bad-signature-token' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+    it('should throw UnauthorizedException when session is expired', async () => {
+      const expiredSession = { ...claimedSession, expiresAt: pastDate };
+      mockUpdateReturning.mockResolvedValueOnce([expiredSession]);
+
+      await expect(
+        service.refresh({ refresh_token: 'expired-token' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should throw UnauthorizedException when user is inactive', async () => {
+      mockUpdateReturning.mockResolvedValueOnce([claimedSession]);
+      mockUsersService.findById.mockResolvedValueOnce({ ...activeUser, isActive: false });
+
+      await expect(
+        service.refresh({ refresh_token: 'inactive-user-token' }),
+      ).rejects.toThrow(UnauthorizedException);
     });
   });
 

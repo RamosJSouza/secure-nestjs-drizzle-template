@@ -22,6 +22,7 @@ import { AuditLogService } from '@/modules/audit/audit-log.service';
 import { TokenRevocationService } from '@/security/token-revocation/token-revocation.service';
 import { SuspiciousActivityService } from '@/security/detection/suspicious-activity.service';
 import { RiskEngineService } from '@/security/risk-engine/risk-engine.service';
+import { SecurityEventService } from '@/security/events/security-event.service';
 
 const ACCESS_TOKEN_EXPIRES = '15m';
 const REFRESH_TOKEN_EXPIRES = '7d';
@@ -31,7 +32,7 @@ const MAX_SESSIONS_PER_USER = 10;
 
 const ARGON2_OPTIONS: argon2.Options = {
   type: argon2.argon2id,
-  memoryCost: 65536, // 64 MiB
+  memoryCost: 65536, 
   timeCost: 3,
   parallelism: 4,
 };
@@ -48,6 +49,7 @@ export class AuthService {
     private tokenRevocationService: TokenRevocationService,
     private suspiciousActivityService: SuspiciousActivityService,
     private riskEngineService: RiskEngineService,
+    private securityEventService: SecurityEventService,
   ) {}
 
   private get db() {
@@ -63,7 +65,7 @@ export class AuthService {
       return { valid, needsRehash: false };
     }
     const valid = await bcryptCompare(plaintext, stored);
-    return { valid, needsRehash: valid }; // bcrypt: rehash on success
+    return { valid, needsRehash: valid }; 
   }
 
   private deviceFingerprint(userAgent: string | undefined, ip: string | undefined): string {
@@ -165,7 +167,7 @@ export class AuthService {
     });
   }
 
-  private async enforceSessionLimit(userId: string): Promise<void> {
+  private async enforceSessionLimit(userId: string, ip?: string): Promise<void> {
     const activeSessions = await this.db
       .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
       .from(sessions)
@@ -186,10 +188,14 @@ export class AuthService {
     if (jtisToRevoke.length > 0) {
       await this.tokenRevocationService
         .revokeMany(jtisToRevoke, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
-        .catch(() => undefined); 
+        .catch(() => undefined);
     }
 
     this.logger.log(`Evicted ${toEvict.length} oldest sessions for user ${userId} (limit: ${MAX_SESSIONS_PER_USER})`);
+
+    this.securityEventService
+      .sessionLimitEviction({ userId, evictedCount: toEvict.length, ip })
+      .catch(() => undefined);
   }
 
   async login(
@@ -306,43 +312,49 @@ export class AuthService {
   ): Promise<{ email: string; access_token: string; refresh_token: string }> {
     const token = dto.refresh_token;
 
-    let payload: { sub: string; email: string; roleId?: string; exp: number };
+    let payload: { sub: string; exp: number };
     try {
       payload = this.jwtService.verify(token, { algorithms: ['RS256'] });
     } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
+    const now = new Date();
     const tokenHash = this.hashRefreshToken(token);
 
-    const [sessionWithUser] = await this.db.query.sessions.findMany({
-      with: { user: true },
-      where: eq(sessions.refreshTokenHash, tokenHash),
-      limit: 1,
-    });
+    const [claimed] = await this.db
+      .update(sessions)
+      .set({ revokedAt: now, lastUsedAt: now })
+      .where(and(eq(sessions.refreshTokenHash, tokenHash), isNull(sessions.revokedAt)))
+      .returning();
 
-    if (!sessionWithUser || !this.constantTimeCompare(tokenHash, sessionWithUser.refreshTokenHash)) {
-      throw new UnauthorizedException('Invalid refresh token');
+    if (!claimed) {
+      const [existing] = await this.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.refreshTokenHash, tokenHash))
+        .limit(1);
+
+      if (existing?.revokedAt) {
+        await this.revokeSessionFamilyAndLogReuse(existing, ip, userAgent);
+        throw new UnauthorizedException('Refresh token reuse detected. All sessions have been revoked.');
+      }
+      throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
-    const now = new Date();
-    if (sessionWithUser.revokedAt) {
-      await this.revokeSessionFamilyAndLogReuse(sessionWithUser, ip, userAgent);
-      throw new UnauthorizedException(
-        'Refresh token reuse detected. All sessions have been revoked.',
-      );
+    if (claimed.expiresAt < now) throw new UnauthorizedException('Refresh token expired');
+
+    if (claimed.accessTokenJti) {
+      this.tokenRevocationService
+        .revokeToken(claimed.accessTokenJti, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
+        .catch(() => undefined);
     }
 
-    if (sessionWithUser.expiresAt < now) {
-      throw new UnauthorizedException('Refresh token expired');
-    }
+    const user = await this.usersService.findById(claimed.userId);
+    if (!user || !user.isActive) throw new UnauthorizedException('Invalid refresh token');
+    if (user.lockedUntil && user.lockedUntil > now) throw new UnauthorizedException('Account is locked.');
 
-    const user = sessionWithUser.user;
-    if (!user.isActive) {
-      throw new UnauthorizedException('Invalid refresh token');
-    }
-
-    return this.rotateSession(sessionWithUser, user, ip, userAgent);
+    return this.createTokensAndSession(user as User, ip, userAgent, claimed.id);
   }
 
   async logout(userId: string, refreshToken: string): Promise<void> {
@@ -360,7 +372,7 @@ export class AuthService {
       )
       .limit(1);
 
-    if (!session) return; 
+    if (!session) return;
 
     await this.db
       .update(sessions)
@@ -383,75 +395,19 @@ export class AuthService {
     user: User,
     ip?: string,
     userAgent?: string,
+    rotatedFromSessionId?: string,
   ): Promise<{ email: string; access_token: string; refresh_token: string }> {
-    await this.enforceSessionLimit(user.id);
-
-    const jti = randomUUID(); 
-    const tokenPayload = { sub: user.id, email: user.email, roleId: user.roleId, jti };
-
-    const accessToken = this.jwtService.sign(tokenPayload, {
-      expiresIn: ACCESS_TOKEN_EXPIRES,
-      algorithm: 'RS256',
-    });
-
-    const refreshToken = this.jwtService.sign(
-      { sub: user.id, email: user.email, roleId: user.roleId },
-      { expiresIn: REFRESH_TOKEN_EXPIRES, algorithm: 'RS256' },
-    );
-
-    const refreshTokenHash = this.hashRefreshToken(refreshToken);
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
-
-    await this.db.insert(sessions).values({
-      userId: user.id,
-      refreshTokenHash,
-      accessTokenJti: jti,
-      deviceFingerprint: this.deviceFingerprint(userAgent, ip),
-      ip: ip ?? null,
-      userAgent: userAgent ?? null,
-      expiresAt,
-    });
-
-    return {
-      email: user.email,
-      access_token: accessToken,
-      refresh_token: refreshToken,
-    };
-  }
-
-  private async rotateSession(
-    oldSession: Session,
-    user: User,
-    ip?: string,
-    userAgent?: string,
-  ): Promise<{ email: string; access_token: string; refresh_token: string }> {
-    const now = new Date();
-
-    await this.db
-      .update(sessions)
-      .set({ revokedAt: now, lastUsedAt: now })
-      .where(eq(sessions.id, oldSession.id));
-
-    if (oldSession.accessTokenJti) {
-      await this.tokenRevocationService
-        .revokeToken(
-          oldSession.accessTokenJti,
-          TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS,
-        )
-        .catch(() => undefined); 
-    }
+    await this.enforceSessionLimit(user.id, ip);
 
     const jti = randomUUID();
-    const tokenPayload = { sub: user.id, email: user.email, roleId: user.roleId, jti };
 
-    const accessToken = this.jwtService.sign(tokenPayload, {
-      expiresIn: ACCESS_TOKEN_EXPIRES,
-      algorithm: 'RS256',
-    });
+    const accessToken = this.jwtService.sign(
+      { sub: user.id, jti },
+      { expiresIn: ACCESS_TOKEN_EXPIRES, algorithm: 'RS256' },
+    );
 
     const refreshToken = this.jwtService.sign(
-      { sub: user.id, email: user.email, roleId: user.roleId },
+      { sub: user.id },
       { expiresIn: REFRESH_TOKEN_EXPIRES, algorithm: 'RS256' },
     );
 
@@ -467,7 +423,7 @@ export class AuthService {
       ip: ip ?? null,
       userAgent: userAgent ?? null,
       expiresAt,
-      rotatedFromSessionId: oldSession.id,
+      rotatedFromSessionId: rotatedFromSessionId ?? null,
     });
 
     return {

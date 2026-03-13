@@ -21,11 +21,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: { sub: string; email: string; roleId?: string; jti?: string }) {
-    // --- JTI revocation check ---
-    // O(1) Redis lookup. If the JTI is in the revocation list (logout, password-change,
-    // session eviction), the token is immediately rejected — even within the 15-min TTL.
-    // Fails OPEN if Redis is unavailable (see TokenRevocationService for rationale).
+  async validate(payload: { sub: string; jti?: string }) {
     if (payload.jti) {
       const revoked = await this.tokenRevocationService.isRevoked(payload.jti);
       if (revoked) {
@@ -33,11 +29,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
 
-    // --- User state validation ---
-    // Always reload from DB — do NOT trust roleId from the JWT claim.
-    // If an admin changes a user's role, the JWT claim becomes stale.
-    // The DB lookup ensures the current role is always used for RBAC checks.
-    const user = await this.usersService.findOne(payload.email);
+    const user = await this.usersService.findById(payload.sub);
 
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Invalid token');
@@ -50,9 +42,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     RequestContext.setUser(user.id);
 
-    // Strip password hash — must NEVER be present in req.user
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { password: _password, ...safeUser } = user;
-    return safeUser;
+    return user;
   }
 }

@@ -45,6 +45,21 @@ export class UsersService {
   }
 
   /**
+   * Find an active, non-deleted user by ID.
+   * Returns the full row (including password hash) for auth verification only.
+   * Used exclusively by changePassword to verify the current password.
+   * Callers outside of auth flows must NOT expose this object to clients.
+   */
+  async findOneByIdForAuth(id: string): Promise<User | undefined> {
+    const [user] = await this.dbService.db
+      .select()
+      .from(users)
+      .where(and(eq(users.id, id), isNull(users.deletedAt)))
+      .limit(1);
+    return user;
+  }
+
+  /**
    * Find an active, non-deleted user by email.
    * Returns the full row (including password hash) for auth verification only.
    * Callers outside of auth flows must NOT expose this object to clients.

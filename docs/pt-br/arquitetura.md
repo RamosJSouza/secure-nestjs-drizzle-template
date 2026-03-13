@@ -16,7 +16,7 @@ O Prime Nest é um backend NestJS pronto para produção, com estrutura modular 
 | HealthModule | Probes de liveness e readiness |
 | GracefulShutdownModule | Encerramento controlado |
 | LoggerModule | Pino, Correlation ID e redaction de PII (`@Global`) |
-| SecurityModule | Revogação de JTI e detecção de credential stuffing (`@Global`) |
+| SecurityModule | Revogação de JTI, detecção de credential stuffing e Motor de Risco (`@Global`) |
 | ThrottlerModule | Rate limiting por endpoint (`@nestjs/throttler`) |
 
 ## Fluxo de Dados
@@ -44,7 +44,8 @@ src/
 │   └── rbac/         # Entidades e serviços RBAC
 ├── security/          # Módulo de segurança @Global
 │   ├── token-revocation/   # Blocklist Redis de JTI
-│   └── detection/          # Detecção de credential stuffing
+│   ├── detection/          # Detecção de credential stuffing
+│   └── risk-engine/        # Pontuação de risco no login (5 sinais, 4 níveis)
 ├── users/            # UsersService
 └── main.ts
 ```
@@ -57,6 +58,8 @@ src/
 - **Swagger desabilitado em produção** — `NODE_ENV=production` impede o registro de `/api/docs`. Disponível apenas em desenvolvimento e teste.
 - **Rate limiting em duas camadas** — `express-rate-limit` para proteção ampla por IP; `@nestjs/throttler` para throttling fino por endpoint (especialmente rotas críticas de autenticação).
 - **Hash de senhas com Argon2id** — Substitui o bcrypt; migração transparente no primeiro login.
+- **Motor de Risco** — Pontua cada login por 5 sinais de ameaça (dispositivo, IP, taxa de falhas, bloqueio, reutilização). Pontuação `critical` (≥80) bloqueia o login e revoga todas as sessões imediatamente.
+- **Verificação de senha atual** — `change-password` exige a senha atual; previne tomada de conta via token de acesso roubado.
 - **Trust proxy habilitado** — Garante que os IPs reais dos clientes sejam usados no rate limiting e nos logs de auditoria quando implantado atrás de Nginx/ALB.
 
 ## Camada de Banco (Drizzle)

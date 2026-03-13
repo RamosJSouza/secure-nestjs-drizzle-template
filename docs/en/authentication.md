@@ -29,9 +29,10 @@ The system uses JWT with **RS256**. The private key (`PRIVATE_KEY`) signs tokens
 3. Server validates credentials — all failure cases return the same `"Invalid credentials"` message to prevent user enumeration.
 4. Checks account `isActive = true` and `deletedAt IS NULL` (soft-deleted accounts cannot login).
 5. Failed password attempts increment both per-account lockout counter and per-IP suspicious activity counter.
-6. On success: session count is enforced (max 10 per user — oldest evicted with JTI revocation if limit is exceeded).
-7. A unique `jti` UUID is embedded in the access token and stored in the session row.
-8. Returns `access_token` (with JTI) and `refresh_token`. Device fingerprint (SHA-256 of User-Agent + IP) stored with the session.
+6. On success: the **Risk Engine** scores the login based on device fingerprint, IP history, and account threat signals. A `critical` score blocks the login and revokes all sessions immediately.
+7. Session count is enforced (max 10 per user — oldest evicted with JTI revocation if limit is exceeded).
+8. A unique `jti` UUID is embedded in the access token and stored in the session row.
+9. Returns `access_token` (with JTI) and `refresh_token`. Device fingerprint (full SHA-256 hex of User-Agent + IP) stored with the session.
 
 ### Refresh
 
@@ -68,6 +69,7 @@ Every access token carries a `jti` UUID. On logout, refresh rotation, or passwor
 ### Password Change
 
 - `POST /auth/change-password` requires Bearer auth.
+- The request body must include **`currentPassword`** — the current password is verified before any change is applied. This prevents account takeover if an access token is stolen.
 - All active session JTIs are collected, then all sessions are revoked in the DB.
 - All collected JTIs are added to the Redis blocklist — **all access tokens are immediately invalid**, not just after their TTL.
 - Already revoked sessions keep their original `revoked_at` timestamp for audit integrity.

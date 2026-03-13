@@ -26,7 +26,9 @@ Instead of assembling auth, RBAC, logging, health checks, and database patterns 
 - **JTI Token Revocation** — every access token carries a unique ID; logout and password change revoke it instantly via Redis blocklist — no waiting for the 15-min TTL.
 - **Refresh Token Rotation + Reuse Detection** — blocks replay attacks and revokes all session JTIs on theft detection.
 - **Credential Stuffing Protection** — per-IP Redis counter; 20 failures/hour → 15-min IP block (HTTP 429) across all accounts.
-- **Session Limits + Device Fingerprinting** — max 10 sessions per user; oldest evicted with JTI revocation; device tracked via SHA-256(User-Agent + IP).
+- **Risk Engine** — every successful login is scored by 5 threat signals (new device, new IP, IP failure rate, recent lockout, token reuse); `critical` score (≥80) blocks login and revokes all sessions instantly.
+- **currentPassword Verification on Change** — `POST /auth/change-password` requires the current password, preventing account takeover via stolen access tokens.
+- **Session Limits + Device Fingerprinting** — max 10 sessions per user; oldest evicted with JTI revocation; device tracked via full SHA-256 hex of User-Agent + IP.
 - **Explicit Logout** — `POST /auth/logout` revokes the DB session AND immediately invalidates the access token via JTI.
 - **Audit-Ready Session Revocation** — preserves `revoked_at` history for forensic integrity.
 - **Database-Driven RBAC** — avoids hardcoded roles; role changes take effect on the next request (no re-login required).
@@ -94,7 +96,10 @@ See full details in:
 | **Access token revocation** | **JTI UUID per token + Redis blocklist (O(1) per request)** |
 | **Credential stuffing** | **Per-IP Redis counter; 20 fail/h → 15-min block (HTTP 429)** |
 | **Session limits** | **Max 10 per user; oldest evicted with JTI revocation** |
-| **Device fingerprinting** | **SHA-256(User-Agent + IP) stored per session** |
+| **Device fingerprinting** | **Full SHA-256 hex of (User-Agent + IP) stored per session** |
+| **Risk Engine** | **5-signal login risk scoring; `critical` (≥80) → login blocked + all sessions revoked** |
+| **currentPassword on change** | **`change-password` verifies current password before applying new one** |
+| **PermissionGuard safety** | **Fail-open with WARN log if `@RequirePermissions` absent; 403 never exposes permission names** |
 | **RBAC audit trail** | **`assignPermissions` logs before/after diff** |
 | **PII redaction** | **Pino redacts auth header, cookie, passwords, refresh_token** |
 | **Correlation ID validation** | **UUID v4 format enforced; injected values discarded** |

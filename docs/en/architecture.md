@@ -16,7 +16,7 @@ Prime Nest is a production-ready NestJS backend with a modular structure designe
 | HealthModule | Liveness and readiness probes |
 | GracefulShutdownModule | Clean shutdown handling |
 | LoggerModule | Pino + Correlation ID + PII redaction (`@Global`) |
-| SecurityModule | JTI token revocation + credential stuffing detection (`@Global`) |
+| SecurityModule | JTI token revocation + credential stuffing detection + Risk Engine (`@Global`) |
 | ThrottlerModule | Per-endpoint rate limiting (`@nestjs/throttler`) |
 
 ## Data Flow
@@ -44,7 +44,8 @@ src/
 │   └── rbac/          # RBAC entities and services
 ├── security/          # @Global security module
 │   ├── token-revocation/   # Redis JTI blocklist
-│   └── detection/          # Credential stuffing detection
+│   ├── detection/          # Credential stuffing detection
+│   └── risk-engine/        # Login risk scoring (5 signals, 4 levels)
 ├── users/             # UsersService
 └── main.ts
 ```
@@ -57,6 +58,8 @@ src/
 - **Swagger disabled in production** — `NODE_ENV=production` prevents `/api/docs` from being registered. Available only in development and test environments.
 - **Two-layer rate limiting** — `express-rate-limit` for broad IP-level protection; `@nestjs/throttler` for fine-grained per-endpoint throttling (especially critical auth routes).
 - **Argon2id password hashing** — Replaces bcrypt; transparent migration on first login.
+- **Risk Engine** — Scores every login by 5 threat signals (device, IP, failure rate, lockout, reuse). `critical` score (≥80) blocks login and revokes all sessions immediately.
+- **currentPassword verification** — `change-password` requires the current password; prevents account takeover via stolen access tokens.
 - **Trust proxy enabled** — Ensures real client IPs are used for rate limiting and audit logs when deployed behind Nginx/ALB.
 
 ## Database Layer (Drizzle)

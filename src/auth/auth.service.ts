@@ -21,6 +21,8 @@ import { users, User } from '@/database/schema/users.schema';
 import { AuditLogService } from '@/modules/audit/audit-log.service';
 import { TokenRevocationService } from '@/security/token-revocation/token-revocation.service';
 import { SuspiciousActivityService } from '@/security/detection/suspicious-activity.service';
+import { RiskEngineService } from '@/security/risk-engine/risk-engine.service';
+import { SecurityEventService } from '@/security/events/security-event.service';
 
 const ACCESS_TOKEN_EXPIRES = '15m';
 const REFRESH_TOKEN_EXPIRES = '7d';
@@ -30,7 +32,7 @@ const MAX_SESSIONS_PER_USER = 10;
 
 const ARGON2_OPTIONS: argon2.Options = {
   type: argon2.argon2id,
-  memoryCost: 65536, // 64 MiB
+  memoryCost: 65536, 
   timeCost: 3,
   parallelism: 4,
 };
@@ -46,20 +48,14 @@ export class AuthService {
     private dbService: DatabaseService,
     private tokenRevocationService: TokenRevocationService,
     private suspiciousActivityService: SuspiciousActivityService,
+    private riskEngineService: RiskEngineService,
+    private securityEventService: SecurityEventService,
   ) {}
 
   private get db() {
     return this.dbService.db;
   }
 
-  // ---------------------------------------------------------------------------
-  // Password verification
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Verify plaintext against a stored hash.
-   * Supports both Argon2id (new) and bcrypt (legacy migration path).
-   */
   private async verifyPassword(
     plaintext: string,
     stored: string,
@@ -69,23 +65,14 @@ export class AuthService {
       return { valid, needsRehash: false };
     }
     const valid = await bcryptCompare(plaintext, stored);
-    return { valid, needsRehash: valid }; // bcrypt: rehash on success
+    return { valid, needsRehash: valid }; 
   }
-
-  // ---------------------------------------------------------------------------
-  // Device fingerprinting
-  // ---------------------------------------------------------------------------
 
   private deviceFingerprint(userAgent: string | undefined, ip: string | undefined): string {
     return createHash('sha256')
       .update(`${userAgent ?? ''}|${ip ?? ''}`)
-      .digest('hex')
-      .slice(0, 32);
+      .digest('hex');
   }
-
-  // ---------------------------------------------------------------------------
-  // Session family graph (for reuse detection / forensics)
-  // ---------------------------------------------------------------------------
 
   private hashRefreshToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
@@ -147,14 +134,12 @@ export class AuthService {
     const userId = reusedSession.userId;
     const sessionFamilyIds = await this.getSessionFamilyIds(reusedSession);
 
-    // Revoke ALL sessions for this user
     const revokedSessions = await this.db
       .update(sessions)
       .set({ revokedAt: new Date() })
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
       .returning({ id: sessions.id, accessTokenJti: sessions.accessTokenJti });
 
-    // Also add all access token JTIs to the revocation list
     const jtis = revokedSessions
       .map((s) => s.accessTokenJti)
       .filter((j): j is string => !!j);
@@ -182,16 +167,7 @@ export class AuthService {
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Session count enforcement
-  // ---------------------------------------------------------------------------
-
-  /**
-   * If the user already has MAX_SESSIONS_PER_USER active sessions, revoke the
-   * oldest ones to stay within the limit. This prevents session table bloat
-   * and limits the blast radius if an account is repeatedly compromised.
-   */
-  private async enforceSessionLimit(userId: string): Promise<void> {
+  private async enforceSessionLimit(userId: string, ip?: string): Promise<void> {
     const activeSessions = await this.db
       .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
       .from(sessions)
@@ -200,7 +176,6 @@ export class AuthService {
 
     if (activeSessions.length < MAX_SESSIONS_PER_USER) return;
 
-    // Evict oldest sessions to make room for the new one
     const toEvict = activeSessions.slice(0, activeSessions.length - MAX_SESSIONS_PER_USER + 1);
     const idsToEvict = toEvict.map((s) => s.id);
     const jtisToRevoke = toEvict.map((s) => s.accessTokenJti).filter((j): j is string => !!j);
@@ -213,22 +188,21 @@ export class AuthService {
     if (jtisToRevoke.length > 0) {
       await this.tokenRevocationService
         .revokeMany(jtisToRevoke, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
-        .catch(() => undefined); // non-critical: token will expire anyway
+        .catch(() => undefined);
     }
 
     this.logger.log(`Evicted ${toEvict.length} oldest sessions for user ${userId} (limit: ${MAX_SESSIONS_PER_USER})`);
-  }
 
-  // ---------------------------------------------------------------------------
-  // Public auth flows
-  // ---------------------------------------------------------------------------
+    this.securityEventService
+      .sessionLimitEviction({ userId, evictedCount: toEvict.length, ip })
+      .catch(() => undefined);
+  }
 
   async login(
     dto: LoginDto,
     ip?: string,
     userAgent?: string,
   ): Promise<{ email: string; access_token: string; refresh_token: string }> {
-    // --- IP blocklist check (credential stuffing protection) ---
     if (ip && (await this.suspiciousActivityService.isIpBlocked(ip))) {
       throw new HttpException(
         'Too many failed attempts from this IP. Please try again later.',
@@ -238,9 +212,7 @@ export class AuthService {
 
     const user = await this.usersService.findOne(dto.email);
 
-    // Uniform error for all negative paths — prevents user enumeration
     if (!user || !user.isActive) {
-      // Still record the failed attempt to detect credential stuffing
       if (ip) {
         await this.suspiciousActivityService.recordFailedAttempt(ip, dto.email);
       }
@@ -255,7 +227,6 @@ export class AuthService {
     const { valid, needsRehash } = await this.verifyPassword(dto.password, user.password);
 
     if (!valid) {
-      // Record for both per-account lockout AND cross-account IP detection
       const [failResult] = await Promise.all([
         this.usersService.recordFailedLogin(user.id),
         ip ? this.suspiciousActivityService.recordFailedAttempt(ip, dto.email) : Promise.resolve(false),
@@ -278,7 +249,6 @@ export class AuthService {
 
     await this.usersService.resetFailedLogin(user.id);
 
-    // Transparent Argon2 migration: rehash bcrypt hashes on successful login
     if (needsRehash) {
       argon2
         .hash(dto.password, ARGON2_OPTIONS)
@@ -286,6 +256,50 @@ export class AuthService {
         .catch((err: Error) =>
           this.logger.warn(`Argon2 rehash failed for user ${user.id}: ${err.message}`),
         );
+    }
+
+    const fingerprint = this.deviceFingerprint(userAgent, ip);
+    const risk = await this.riskEngineService.assessLoginRisk(user.id, fingerprint, ip ?? '');
+
+    if (risk.level === 'critical') {
+      const activeSessions = await this.db
+        .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
+        .from(sessions)
+        .where(and(eq(sessions.userId, user.id), isNull(sessions.revokedAt)));
+
+      const jtis = activeSessions.map((s) => s.accessTokenJti).filter((j): j is string => !!j);
+      await this.db
+        .update(sessions)
+        .set({ revokedAt: new Date() })
+        .where(and(eq(sessions.userId, user.id), isNull(sessions.revokedAt)));
+      if (jtis.length > 0) {
+        await this.tokenRevocationService
+          .revokeMany(jtis, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
+          .catch(() => undefined);
+      }
+      await this.auditLogService.log({
+        action: 'security.risk.login_blocked',
+        entityType: 'User',
+        entityId: user.id,
+        metadata: { riskScore: risk.score, signals: risk.signals },
+        ip: ip ?? undefined,
+        userAgent: userAgent ?? undefined,
+      });
+      throw new HttpException(
+        'Login blocked due to suspicious activity. All sessions have been revoked.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    if (risk.level !== 'low') {
+      await this.auditLogService.log({
+        action: 'security.risk.elevated_login',
+        entityType: 'User',
+        entityId: user.id,
+        metadata: { riskScore: risk.score, riskLevel: risk.level, signals: risk.signals },
+        ip: ip ?? undefined,
+        userAgent: userAgent ?? undefined,
+      });
     }
 
     return this.createTokensAndSession(user, ip, userAgent);
@@ -298,49 +312,54 @@ export class AuthService {
   ): Promise<{ email: string; access_token: string; refresh_token: string }> {
     const token = dto.refresh_token;
 
-    let payload: { sub: string; email: string; roleId?: string; exp: number };
+    let payload: { sub: string; exp: number };
     try {
       payload = this.jwtService.verify(token, { algorithms: ['RS256'] });
     } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
+    const now = new Date();
     const tokenHash = this.hashRefreshToken(token);
 
-    const [sessionWithUser] = await this.db.query.sessions.findMany({
-      with: { user: true },
-      where: eq(sessions.refreshTokenHash, tokenHash),
-      limit: 1,
-    });
+    const [claimed] = await this.db
+      .update(sessions)
+      .set({ revokedAt: now, lastUsedAt: now })
+      .where(and(eq(sessions.refreshTokenHash, tokenHash), isNull(sessions.revokedAt)))
+      .returning();
 
-    if (!sessionWithUser || !this.constantTimeCompare(tokenHash, sessionWithUser.refreshTokenHash)) {
-      throw new UnauthorizedException('Invalid refresh token');
+    if (!claimed) {
+      const [existing] = await this.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.refreshTokenHash, tokenHash))
+        .limit(1);
+
+      if (existing?.revokedAt) {
+        await this.revokeSessionFamilyAndLogReuse(existing, ip, userAgent);
+        throw new UnauthorizedException('Refresh token reuse detected. All sessions have been revoked.');
+      }
+      throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
-    const now = new Date();
-    if (sessionWithUser.revokedAt) {
-      await this.revokeSessionFamilyAndLogReuse(sessionWithUser, ip, userAgent);
-      throw new UnauthorizedException(
-        'Refresh token reuse detected. All sessions have been revoked.',
-      );
+    if (claimed.expiresAt < now) throw new UnauthorizedException('Refresh token expired');
+
+    if (claimed.accessTokenJti) {
+      this.tokenRevocationService
+        .revokeToken(claimed.accessTokenJti, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
+        .catch(() => undefined);
     }
 
-    if (sessionWithUser.expiresAt < now) {
-      throw new UnauthorizedException('Refresh token expired');
-    }
+    const user = await this.usersService.findById(claimed.userId);
+    if (!user || !user.isActive) throw new UnauthorizedException('Invalid refresh token');
+    if (user.lockedUntil && user.lockedUntil > now) throw new UnauthorizedException('Account is locked.');
 
-    const user = sessionWithUser.user;
-    if (!user.isActive) {
-      throw new UnauthorizedException('Invalid refresh token');
-    }
-
-    return this.rotateSession(sessionWithUser, user, ip, userAgent);
+    return this.createTokensAndSession(user as User, ip, userAgent, claimed.id);
   }
 
   async logout(userId: string, refreshToken: string): Promise<void> {
     const tokenHash = this.hashRefreshToken(refreshToken);
 
-    // Find the session to retrieve its access token JTI
     const [session] = await this.db
       .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
       .from(sessions)
@@ -353,15 +372,13 @@ export class AuthService {
       )
       .limit(1);
 
-    if (!session) return; // already revoked or doesn't belong to user — silently ignore
+    if (!session) return;
 
-    // Revoke the DB session
     await this.db
       .update(sessions)
       .set({ revokedAt: new Date() })
       .where(eq(sessions.id, session.id));
 
-    // Immediately invalidate the associated access token via JTI
     if (session.accessTokenJti) {
       await this.tokenRevocationService
         .revokeToken(
@@ -374,84 +391,23 @@ export class AuthService {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Token / session creation
-  // ---------------------------------------------------------------------------
-
   private async createTokensAndSession(
     user: User,
     ip?: string,
     userAgent?: string,
+    rotatedFromSessionId?: string,
   ): Promise<{ email: string; access_token: string; refresh_token: string }> {
-    // Enforce session count limit before creating a new session
-    await this.enforceSessionLimit(user.id);
-
-    const jti = randomUUID(); // unique ID for this access token — used for revocation
-    const tokenPayload = { sub: user.id, email: user.email, roleId: user.roleId, jti };
-
-    const accessToken = this.jwtService.sign(tokenPayload, {
-      expiresIn: ACCESS_TOKEN_EXPIRES,
-      algorithm: 'RS256',
-    });
-
-    const refreshToken = this.jwtService.sign(
-      { sub: user.id, email: user.email, roleId: user.roleId },
-      { expiresIn: REFRESH_TOKEN_EXPIRES, algorithm: 'RS256' },
-    );
-
-    const refreshTokenHash = this.hashRefreshToken(refreshToken);
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
-
-    await this.db.insert(sessions).values({
-      userId: user.id,
-      refreshTokenHash,
-      accessTokenJti: jti,
-      deviceFingerprint: this.deviceFingerprint(userAgent, ip),
-      ip: ip ?? null,
-      userAgent: userAgent ?? null,
-      expiresAt,
-    });
-
-    return {
-      email: user.email,
-      access_token: accessToken,
-      refresh_token: refreshToken,
-    };
-  }
-
-  private async rotateSession(
-    oldSession: Session,
-    user: User,
-    ip?: string,
-    userAgent?: string,
-  ): Promise<{ email: string; access_token: string; refresh_token: string }> {
-    // Revoke the old session
-    await this.db
-      .update(sessions)
-      .set({ revokedAt: new Date() })
-      .where(eq(sessions.id, oldSession.id));
-
-    // Revoke the old access token JTI immediately
-    if (oldSession.accessTokenJti) {
-      await this.tokenRevocationService
-        .revokeToken(
-          oldSession.accessTokenJti,
-          TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS,
-        )
-        .catch(() => undefined); // non-critical: old token expires soon anyway
-    }
+    await this.enforceSessionLimit(user.id, ip);
 
     const jti = randomUUID();
-    const tokenPayload = { sub: user.id, email: user.email, roleId: user.roleId, jti };
 
-    const accessToken = this.jwtService.sign(tokenPayload, {
-      expiresIn: ACCESS_TOKEN_EXPIRES,
-      algorithm: 'RS256',
-    });
+    const accessToken = this.jwtService.sign(
+      { sub: user.id, jti },
+      { expiresIn: ACCESS_TOKEN_EXPIRES, algorithm: 'RS256' },
+    );
 
     const refreshToken = this.jwtService.sign(
-      { sub: user.id, email: user.email, roleId: user.roleId },
+      { sub: user.id },
       { expiresIn: REFRESH_TOKEN_EXPIRES, algorithm: 'RS256' },
     );
 
@@ -467,7 +423,7 @@ export class AuthService {
       ip: ip ?? null,
       userAgent: userAgent ?? null,
       expiresAt,
-      rotatedFromSessionId: oldSession.id,
+      rotatedFromSessionId: rotatedFromSessionId ?? null,
     });
 
     return {
@@ -476,10 +432,6 @@ export class AuthService {
       refresh_token: refreshToken,
     };
   }
-
-  // ---------------------------------------------------------------------------
-  // Registration / password management
-  // ---------------------------------------------------------------------------
 
   async register(dto: RegisterDto) {
     const existing = await this.usersService.findOne(dto.email);
@@ -499,14 +451,20 @@ export class AuthService {
 
   async changePassword(
     userId: string,
+    currentPassword: string,
     newPassword: string,
     ip?: string,
     userAgent?: string,
   ): Promise<{ userId: string }> {
+    const user = await this.usersService.findOneByIdForAuth(userId);
+    if (!user) throw new UnauthorizedException('Invalid credentials');
+
+    const { valid } = await this.verifyPassword(currentPassword, user.password);
+    if (!valid) throw new UnauthorizedException('Current password is incorrect');
+
     const hashedPassword = await argon2.hash(newPassword, ARGON2_OPTIONS);
     await this.usersService.updatePassword(userId, hashedPassword);
 
-    // Collect all active session JTIs before revoking — needed for access token revocation
     const activeSessions = await this.db
       .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
       .from(sessions)
@@ -516,14 +474,12 @@ export class AuthService {
       .map((s) => s.accessTokenJti)
       .filter((j): j is string => !!j);
 
-    // Revoke all DB sessions
     const revoked = await this.db
       .update(sessions)
       .set({ revokedAt: new Date() })
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
       .returning({ id: sessions.id });
 
-    // Revoke all associated access tokens immediately via JTI
     if (jtis.length > 0) {
       await this.tokenRevocationService
         .revokeMany(jtis, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)

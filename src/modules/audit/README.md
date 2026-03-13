@@ -72,15 +72,32 @@ export class RoleController {
 }
 ```
 
+### SecurityEventService
+
+Typed facade over `AuditLogService` for security events. Eliminates raw action strings and makes typos a compile error.
+
+```ts
+// src/security/events/security-event.service.ts
+await this.securityEventService.sessionLimitEviction({ userId, evictedCount, ip });
+await this.securityEventService.sessionRevoked({ sessionId, userId, reason });
+await this.securityEventService.loginFailed({ email, reason, ip, userAgent });
+```
+
+All `SecurityEventType` values map to audit log actions — no new DB table.
+
 ### Actions audited
 
-| Action | Entity | Endpoint | Fonte |
-|--------|--------|----------|-------|
+| Action | Entity | Endpoint | Source |
+|--------|--------|----------|--------|
 | user.create | User | POST /auth/register | @Auditable |
 | user.change_password | User | POST /auth/change-password | @Auditable |
 | role.create | Role | POST /roles | @Auditable |
 | role.update | Role | PUT /roles/:id | @Auditable |
 | role.delete | Role | DELETE /roles/:id | @Auditable |
 | role.assign_permissions | Role | POST /roles/:id/permissions | @Auditable |
-| auth.refresh_token_reuse_detected | Session | — | AuthService (manual) |
 | auth.account.locked | User | — | AuthService (manual) |
+| auth.password.changed | User | — | AuthService (manual) |
+| auth.refresh_token_reuse_detected | Session | — | AuthService (manual) |
+| security.risk.login_blocked | User | — | AuthService (manual) |
+| security.risk.elevated_login | User | — | AuthService (manual) |
+| security.session.limit_eviction | User | — | SecurityEventService |

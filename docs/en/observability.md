@@ -29,6 +29,18 @@ Docker and Kubernetes should use readiness for routing traffic and liveness for 
 
 - Append-only; no updates or deletes.
 - Each audited mutation logs: action, entityType, entityId, actorUserId, correlationId, metadata, ip, userAgent.
-- Events include: user.create, user.change_password, role.*, auth.refresh_token_reuse_detected, auth.account.locked.
+- Security events are emitted via `SecurityEventService` (typed facade — no raw strings).
+
+| Action | Trigger |
+|--------|---------|
+| `user.create` | Register |
+| `user.change_password` | Change password endpoint |
+| `role.*` | RBAC mutations |
+| `auth.account.locked` | 5 consecutive login failures |
+| `auth.password.changed` | Password changed, all sessions revoked |
+| `auth.refresh_token_reuse_detected` | Stolen token replay attempt |
+| `security.risk.login_blocked` | Risk score ≥ 80 (critical) |
+| `security.risk.elevated_login` | Risk score medium/high |
+| `security.session.limit_eviction` | Session cap exceeded (max 10) |
 
 See [Audit Module](../../src/modules/audit/README.md) for integration details.

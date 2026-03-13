@@ -3,6 +3,16 @@ import { ApiProperty } from '@nestjs/swagger';
 
 export class ChangePasswordDto {
   @ApiProperty({
+    example: 'CurrentP@ssw0rd',
+    description: 'Current password for verification',
+    required: true,
+  })
+  @IsNotEmpty()
+  @IsString()
+  @MaxLength(72, { message: 'Password must not exceed 72 characters' })
+  currentPassword: string;
+
+  @ApiProperty({
     minLength: 8,
     example: 'NewSecureP@ssw0rd123',
     description: 'New password (min 8 chars, must include uppercase, lowercase, and digit)',

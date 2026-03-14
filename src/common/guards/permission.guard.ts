@@ -8,10 +8,22 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
 import { RbacService } from '../../modules/rbac/services/rbac.service';
 
 export const PERMISSION_KEY = 'permissions';
 
+/**
+ * PermissionGuard — verifica RBAC via DB a cada request (nunca confia no JWT roleId).
+ *
+ * Comportamento quando @RequirePermissions está ausente:
+ *  - PERMISSION_GUARD_STRICT=false (padrão): fail-open → loga WARN e permite.
+ *    Útil em dev/staging para detectar rotas não protegidas sem bloquear.
+ *  - PERMISSION_GUARD_STRICT=true: fail-closed → lança 403 imediatamente.
+ *    Recomendado em produção para garantir que nenhuma rota fique desprotegida.
+ *
+ * 403 nunca expõe os nomes das permissões requeridas (prevenção de reconhecimento).
+ */
 @Injectable()
 export class PermissionGuard implements CanActivate {
   private readonly logger = new Logger(PermissionGuard.name);
@@ -19,6 +31,7 @@ export class PermissionGuard implements CanActivate {
   constructor(
     private reflector: Reflector,
     private rbacService: RbacService,
+    private configService: ConfigService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -30,9 +43,18 @@ export class PermissionGuard implements CanActivate {
     if (!requiredPermissions) {
       const handler = context.getHandler().name;
       const cls = context.getClass().name;
+      const strictMode = this.configService.get<string>('PERMISSION_GUARD_STRICT') === 'true';
+
+      if (strictMode) {
+        this.logger.error(
+          `PermissionGuard [STRICT] ${cls}.${handler} não tem @RequirePermissions — request bloqueado.`,
+        );
+        throw new ForbiddenException('Access denied');
+      }
+
       this.logger.warn(
-        `PermissionGuard applied to ${cls}.${handler} without @RequirePermissions — ` +
-          `route is RBAC-unprotected. Add @RequirePermissions(...) or remove PermissionGuard.`,
+        `PermissionGuard aplicado em ${cls}.${handler} sem @RequirePermissions — ` +
+          `rota RBAC-desprotegida. Adicione @RequirePermissions(...) ou defina PERMISSION_GUARD_STRICT=true.`,
       );
       return true;
     }
@@ -58,4 +80,4 @@ export class PermissionGuard implements CanActivate {
 }
 
 export const RequirePermissions = (...permissions: string[]) =>
-    SetMetadata(PERMISSION_KEY, permissions);
+  SetMetadata(PERMISSION_KEY, permissions);

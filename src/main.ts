@@ -25,12 +25,33 @@ async function bootstrap() {
         contentSecurityPolicy: {
           directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'"],
-            styleSrc: ["'self'", "'unsafe-inline'"], 
-            imgSrc: ["'self'", 'data:'],
+            scriptSrc: nodeEnv === 'production' ? ["'self'"] : ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", 'data:', 'https:'],
+            connectSrc: ["'self'"],
+            fontSrc: ["'self'"],
+            objectSrc: ["'none'"],
+            mediaSrc: ["'self'"],
+            frameSrc: ["'none'"],
+            frameAncestors: ["'none'"],  
+            baseUri: ["'self'"],
+            formAction: ["'self'"],
+            ...(nodeEnv === 'production' && { upgradeInsecureRequests: [] }),
           },
         },
+        hsts: nodeEnv === 'production'
+          ? { maxAge: 31536000, includeSubDomains: true, preload: true }
+          : false,
         crossOriginEmbedderPolicy: nodeEnv === 'production',
+        crossOriginOpenerPolicy: { policy: 'same-origin' },
+        crossOriginResourcePolicy: { policy: 'same-site' },
+        referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+        noSniff: true,                          
+        xssFilter: true,                       
+        frameguard: { action: 'deny' },         
+        dnsPrefetchControl: { allow: false },   
+        permittedCrossDomainPolicies: { permittedPolicies: 'none' },
+        hidePoweredBy: true,                    
       }),
     );
 

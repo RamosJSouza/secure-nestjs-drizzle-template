@@ -1,0 +1,16 @@
+#!/bin/sh
+# pre-commit: bloqueia commit se existirem vulnerabilidades moderate+ no npm audit.
+# Para pular em emergência: git commit --no-verify (use apenas em hotfixes críticos).
+
+echo "🔒 [pre-commit] Executando npm audit --audit-level=moderate..."
+npm audit --audit-level=moderate
+
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "❌ npm audit encontrou vulnerabilidades moderate/high/critical."
+  echo "   Execute: npm audit fix"
+  echo "   Para forçar o commit em emergência: git commit --no-verify"
+  exit 1
+fi
+
+echo "✅ npm audit: sem vulnerabilidades moderate+. Commit liberado."

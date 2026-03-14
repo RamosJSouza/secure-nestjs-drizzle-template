@@ -1,8 +1,13 @@
 # NestJS Security Pro
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/<OWNER>/<REPO>/ci.yml?branch=main&label=build)](https://github.com/<OWNER>/<REPO>/actions)
+[![CI](https://github.com/RamosJSouza/secure-nestjs-drizzle-template/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/RamosJSouza/secure-nestjs-drizzle-template/actions/workflows/ci.yml)
+[![CD](https://github.com/RamosJSouza/secure-nestjs-drizzle-template/actions/workflows/cd.yml/badge.svg)](https://github.com/RamosJSouza/secure-nestjs-drizzle-template/actions/workflows/cd.yml)
+[![codecov](https://codecov.io/gh/RamosJSouza/secure-nestjs-drizzle-template/branch/main/graph/badge.svg)](https://codecov.io/gh/RamosJSouza/secure-nestjs-drizzle-template)
+[![NestJS](https://img.shields.io/badge/NestJS-11-E0234E.svg?logo=nestjs&logoColor=white)](https://nestjs.com/)
+[![Drizzle ORM](https://img.shields.io/badge/Drizzle_ORM-0.44-C5F74F.svg)](https://orm.drizzle.team/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Node Version](https://img.shields.io/badge/node-%3E%3D20.0.0-339933.svg)](https://nodejs.org/)
+[![Docker](https://img.shields.io/badge/ghcr.io-secure--nestjs--drizzle--template-2496ED.svg?logo=docker&logoColor=white)](https://github.com/RamosJSouza/secure-nestjs-drizzle-template/pkgs/container/secure-nestjs-drizzle-template)
+[![Node](https://img.shields.io/badge/node-%3E%3D20.0.0-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 
 Production-ready secure backend architecture with NestJS, Drizzle ORM, RBAC, and JWT RS256.
 
@@ -42,6 +47,9 @@ Instead of assembling auth, RBAC, logging, health checks, and database patterns 
 - **Correlation ID Injection Prevention** — UUID v4 validation on `X-Correlation-Id`; invalid values discarded and replaced server-side.
 - **Production Observability** — structured logs with correlation IDs, liveness/readiness probes, graceful shutdown.
 - **Drizzle ORM + Migration Workflow** — predictable schema evolution with explicit SQL migrations.
+- **Multi-Tenancy via PostgreSQL RLS** — `TenantDatabaseService.withTenant()` wraps every query in a transaction with `set_config('app.current_tenant', orgId, true)`; belt-and-suspenders with explicit `WHERE organization_id` clause.
+- **Resilient Webhooks** — BullMQ async delivery with HMAC-SHA256 signing; graceful degradation when Redis is unavailable (`DISABLE_REDIS=true`).
+- **CI/CD & Security Pipeline** — GitHub Actions: lint → type-check → coverage ≥ 85% → npm audit → Docker build → Trivy scan; weekly CodeQL + Snyk scan; Dependabot for npm/Actions/Docker.
 
 ## Architecture Snapshot
 
@@ -139,6 +147,10 @@ Placeholders to customize with your own authority content:
 - [NestJS Security Blueprint for SOC2](https://ramosdainformatica.com.br/nestjs-security-blueprint-arquitetura-de-backend-pronta-para-soc2/)
 - [JWT Rotation and Session Defense in Practice](https://ramosdainformatica.com.br/rotacao-de-jwt-e-defesa-de-sessao-na-pratica-com-nestjs/)
 
+
+## Security
+
+For vulnerability disclosure, see [SECURITY.md](./SECURITY.md). Compliance evidence and audit trail documentation: [docs/en/compliance.md](./docs/en/compliance.md).
 
 ## Contribute or Hire Expert Help
 

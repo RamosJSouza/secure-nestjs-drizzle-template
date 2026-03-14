@@ -1,0 +1,87 @@
+version: 2
+
+updates:
+  # ─── npm dependencies ───────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 10
+    groups:
+      nestjs-core:
+        patterns:
+          - '@nestjs/*'
+        update-types:
+          - minor
+          - patch
+      security-deps:
+        patterns:
+          - 'argon2'
+          - 'helmet'
+          - 'passport*'
+          - 'jsonwebtoken'
+          - '@nestjs/jwt'
+          - 'express-rate-limit'
+        update-types:
+          - minor
+          - patch
+      drizzle:
+        patterns:
+          - 'drizzle-orm'
+          - 'drizzle-kit'
+        update-types:
+          - minor
+          - patch
+      dev-tools:
+        patterns:
+          - 'eslint*'
+          - '@typescript-eslint/*'
+          - 'prettier'
+          - 'jest'
+          - 'ts-jest'
+          - 'husky'
+          - '@commitlint/*'
+        update-types:
+          - minor
+          - patch
+    labels:
+      - 'dependencies'
+      - 'automated'
+    commit-message:
+      prefix: 'chore(deps)'
+      include: scope
+
+  # ─── GitHub Actions ──────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 5
+    labels:
+      - 'dependencies'
+      - 'github-actions'
+      - 'automated'
+    commit-message:
+      prefix: 'chore(ci)'
+
+  # ─── Docker ──────────────────────────────────────────────────────────
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 3
+    labels:
+      - 'dependencies'
+      - 'docker'
+      - 'automated'
+    commit-message:
+      prefix: 'chore(docker)'

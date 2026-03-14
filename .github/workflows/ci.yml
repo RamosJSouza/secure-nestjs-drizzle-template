@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Job 1: Lint + Type-check
+  # ─────────────────────────────────────────────
+  lint-typecheck:
+    name: Lint & Type-check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint + Prettier check
+        run: npm run ci:lint
+
+      - name: TypeScript type-check
+        run: npm run type-check
+
+  # ─────────────────────────────────────────────
+  # Job 2: Unit tests + coverage ≥ 85%
+  # ─────────────────────────────────────────────
+  test:
+    name: Tests (coverage ≥ 85%)
+    runs-on: ubuntu-latest
+    needs: lint-typecheck
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate RSA test keys
+        run: |
+          openssl genrsa -out /tmp/test-private.pem 2048
+          openssl rsa -in /tmp/test-private.pem -pubout -out /tmp/test-public.pem
+          {
+            echo "PRIVATE_KEY<<CI_KEY_EOF"
+            cat /tmp/test-private.pem
+            echo "CI_KEY_EOF"
+          } >> "$GITHUB_ENV"
+          {
+            echo "PUBLIC_KEY<<CI_PUB_EOF"
+            cat /tmp/test-public.pem
+            echo "CI_PUB_EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Run tests with 85% coverage threshold
+        run: |
+          npx jest --coverage \
+            --coverageThreshold='{"global":{"statements":85,"branches":85,"functions":85,"lines":85}}' \
+            --forceExit
+        env:
+          NODE_ENV: test
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+          DB_DATABASE: testdb
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+          DISABLE_REDIS: 'true'
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: ./coverage
+          fail_ci_if_error: false
+
+  # ─────────────────────────────────────────────
+  # Job 3: npm audit (falha em high/critical)
+  # ─────────────────────────────────────────────
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    needs: lint-typecheck
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: npm audit (high/critical → fail)
+        run: npm audit --audit-level=high
+
+  # ─────────────────────────────────────────────
+  # Job 4: Build TypeScript + Docker + Trivy scan
+  # ─────────────────────────────────────────────
+  build:
+    name: Build & Docker Scan
+    runs-on: ubuntu-latest
+    needs: [test, audit]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript (nest build)
+        run: npm run build
+
+      - name: Drizzle schema sanity-check
+        run: npx drizzle-kit check
+        continue-on-error: true
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: app-ci:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'app-ci:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'

@@ -1,0 +1,122 @@
+# Secure NestJS Drizzle Template
+> Repository: https://github.com/RamosJSouza/secure-nestjs-drizzle-template
+> Live Documentation & Portfolio: https://ramosdainformatica.com.br/
+> Author LinkedIn: https://www.linkedin.com/in/ramos-souza/
+
+## Description
+A production-grade, security-first NestJS 11 boilerplate tailored for regulated industries — Fintech, Healthtech, and Enterprise SaaS. Built to pass rigorous security reviews, penetration tests, and compliance audits (SOC 2, GDPR, LGPD, PCI-DSS Req 8) out-of-the-box. Requires Node.js >= 24.0.0.
+
+## About the Author: Ramos Souza
+Ramos is a Full-Stack Developer and Software Architect specializing in high-availability and mission-critical systems. With a strong background in building solutions for the financial sector (including banking integrations like PIX) and the healthcare industry, Ramos focuses on secure, scalable, and automated architectures (including SaaS platforms and n8n integrations). This template reflects years of experience handling sensitive data and strict governance requirements.
+
+## Tech Stack
+- Framework: NestJS 11 (Node.js >= 24.0.0 — LTS Krypton)
+- Database: PostgreSQL + Drizzle ORM (type-safe, migration-driven — no schema sync in production)
+- Caching & Queues: Redis — JTI blocklist, credential stuffing counters, BullMQ webhook delivery
+- Auth: JWT RS256 asymmetric keys + Argon2id password hashing (transparent bcrypt migration)
+- Infrastructure: Docker multi-stage builds, non-root user `nestjs`, Healthcheck via wget
+- CI/CD: GitHub Actions (lint → type-check → coverage ≥ 85% → npm audit → Docker + Trivy scan)
+- Weekly: CodeQL, Snyk, Trivy FS scan (SARIF → GitHub Security tab); Dependabot for npm/Actions/Docker
+- Husky pre-commit: npm audit --audit-level=moderate blocks commit on vulnerabilities
+- Dependency security: npm `overrides` field pins ajv to patched versions (6.14.0 / 8.18.0) — eliminates GHSA-2g4f-4pwh-qvx6 ReDoS from transitive dev deps
+
+## Core Security Features
+
+### Authentication & Session Management
+- JWT RS256: asymmetric signing; private key never shared; public key distributable to validators
+- Access token payload: `{sub, jti}` only — no email, roleId, or PII (prevents stale role claims and PII leakage via client decoding)
+- Refresh token payload: `{sub}` only
+- JTI revocation: every access token carries a UUID jti; on logout/rotation/password-change, the JTI is written to Redis with TTL = remaining lifetime; `JwtStrategy` does O(1) Redis GET on every request — revocation is immediate
+- Refresh token rotation + reuse detection: reuse of a revoked token → all sessions revoked + all JTIs blocklisted + audit event
+- Session limits: max 10 concurrent sessions per user; oldest evicted (with JTI revocation) when exceeded
+- Device fingerprinting: full SHA-256 hex of (User-Agent + IP) stored per session
+- Atomic refresh rotation: single `UPDATE ... WHERE revokedAt IS NULL RETURNING *` — eliminates race condition
+- Explicit logout: `POST /auth/logout` revokes specific session by refresh token hash + invalidates JTI immediately
+- currentPassword verification on `change-password`: prevents account takeover via stolen access token
+
+### Password Security
+- Argon2id (64 MiB / 3 iterations / 4 parallelism) — OWASP recommended winner of Password Hashing Competition
+- Transparent bcrypt → Argon2id migration on first successful login (no user action required)
+- Password policy: min 8, max 72 chars, uppercase + lowercase + digit (consistent across all DTOs)
+
+### Risk Engine
+- Scores every login via 5 signals queried in parallel: new device (+20), new IP on known device (+10), IP failure rate tiers (+10/+20/+30), recent lockout (+20), token reuse event (+50)
+- Levels: low (0–29, proceed), medium (30–59, audit), high (60–79, audit), critical (≥80, login blocked + all sessions revoked + all JTIs blocklisted)
+- All detectors fail open (return 0 on Redis/DB error — never blocks logins due to outage)
+
+### RBAC (Database-driven, Zero-Hardcode)
+- Chain: Feature → Permission → RolePermission → Role → User
+- `PermissionGuard` queries DB on every request; role changes take effect immediately (no re-login)
+- `PERMISSION_GUARD_STRICT=true` → fail-closed (403) when `@RequirePermissions` absent; default: fail-open with WARN log
+- 403 responses never expose required permission names
+- UUID path params validated with `ParseUUIDPipe` on all RBAC routes
+
+### Multi-Tenancy (PostgreSQL RLS + Application Layer)
+- `TenantModule` is `@Global()` — exports `TenantDatabaseService` and `TenantGuard`
+- `TenantDatabaseService.withTenant(orgId, fn)`: wraps query in transaction + `SET LOCAL app.current_tenant = orgId` — PostgreSQL RLS policies enforce isolation at DB engine level
+- Belt-and-suspenders: every service method also includes explicit `WHERE organization_id = orgId`
+- `TenantGuard` + `@RequireTenant()`: 403 if user has no organization in RequestContext
+- RLS SQL: `src/database/rls/0001_enable_rls.sql` — apply once per environment via `psql -f`
+- Practical example: `docs/examples/rbac-multi-tenant.md` (full CRUD with DTOs, service, controller, seed, E2E)
+
+### Credential Stuffing Protection
+- Per-IP Redis counter (`sec:fail:ip:{ip}`): 20 failures/hour → 15-min IP block (HTTP 429)
+- Counter increments even for non-existent accounts (prevents enumeration-based stuffing)
+- Per-account lockout: 5 failed logins → 15-min lock
+- User enumeration prevention: uniform "Invalid credentials" for all login failures
+
+### HTTP Hardening (Helmet)
+- CSP: `default-src 'self'`; `script-src` and `style-src` include `'unsafe-inline'` in dev only (Swagger UI); production enforces `'self'` for both — eliminates CSS injection exfiltration vector
+- HSTS: `maxAge: 31536000, includeSubDomains: true, preload: true` (production only)
+- frameAncestors: `'none'`, frameguard: `deny`, noSniff, xssFilter, dnsPrefetchControl: off, hidePoweredBy, permittedCrossDomainPolicies: none
+- CORS: parsed from `ALLOWED_ORIGINS`; dev defaults to `true`; prod requires explicit URLs (Joi-enforced)
+- Trust proxy: `app.set('trust proxy', 1)` — real client IP for rate limiting and audit logs
+
+### Rate Limiting (Two Layers)
+- Layer 1 (express-rate-limit): 300 req/15min per IP, all routes; exempt: `/health/liveness`, `/health/readiness`
+- Layer 2 (@nestjs/throttler): `auth` limiter — 5/min on login, 10/min on refresh; `default` — 120/min
+
+### Observability & Compliance
+- Pino structured logging with PII redaction: authorization header, cookie, password fields, refresh_token, set-cookie response header — never written to logs
+- Correlation ID: UUID v4 validated on `X-Correlation-Id`; injected values discarded and replaced server-side; stored in every audit log entry
+- Append-only audit log (`audit_logs` table): no UPDATE/DELETE paths exist
+- Typed security events via `SecurityEventService` (enum `SecurityEventType` — no raw strings)
+- Health: `GET /health/liveness` (process alive), `GET /health/readiness` (DB + Redis)
+- Swagger: disabled in `NODE_ENV=production`
+
+### Webhooks
+- `WebhookEndpointsModule`: CRUD (always available, no Redis dependency)
+- `WebhooksModule`: BullMQ async delivery + HMAC-SHA256 signing (`sha256=hmac(secret, "${ts}.${JSON.stringify(data)}")`)
+- `DISABLE_REDIS=true` → gracefully disables BullMQ queue at startup; CRUD remains available
+- All webhook queries include explicit `WHERE organization_id = orgId` + RLS isolation
+
+## Key Architecture Decisions
+- `DatabaseModule` is `@Global()` — never import in feature modules; inject `DatabaseService` and use `.db`
+- `SecurityModule` is `@Global()` — must appear in `AppModule.imports[]` BEFORE `AuthModule`
+- `TenantModule` is `@Global()` — must appear before `AuthModule`
+- `import 'dotenv/config'` as first import in `main.ts` — ensures env vars loaded before module-level `DISABLE_REDIS` check
+- No TypeORM — Drizzle ORM only; schema in `src/database/schema/`; migrations via `drizzle-kit`
+- Fail-fast env validation via Joi (`src/config/validation.schema.ts`): production enforces PRIVATE_KEY, PUBLIC_KEY, DB_SSL=true, ALLOWED_ORIGINS
+- Soft-delete: `deletedAt + isActive=false` set atomically on `remove()`; all queries filter `isNull(deletedAt)`
+- Password stripped from `req.user` in `JwtStrategy.validate()`
+- `JwtStrategy` uses `findById(sub)` — never trusts `email` or `roleId` from JWT claim
+
+## Test Coverage
+- 65 tests passing across 10 suites (unit tests, no E2E in standard suite)
+- E2E: `test/tenant-isolation.e2e-spec.ts` — 11 scenarios for cross-tenant isolation (requires real PostgreSQL)
+- Run: `npx jest --config test/jest-e2e.json --no-coverage tenant-isolation`
+
+## Docs Structure
+- `docs/en/` — English reference docs (architecture, authentication, rbac, security, observability, configuration, compliance, deployment)
+- `docs/pt-br/` — Portuguese translations of all docs including deployment guide
+- `docs/examples/rbac-multi-tenant.md` — Complete working RBAC + RLS multi-tenancy example (schema, SQL, DTOs, service, controller, seed, E2E test, security flow diagram)
+
+## Quick Start
+```bash
+cp .env.example .env
+npm install --legacy-peer-deps
+openssl genrsa -out private.pem 2048 && openssl rsa -in private.pem -pubout -out public.pem
+npm run db:migrate && npm run seed:rbac
+npm run dev
+# Swagger: http://localhost:3000/api/docs (dev only)
+```

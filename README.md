@@ -7,7 +7,7 @@
 [![Drizzle ORM](https://img.shields.io/badge/Drizzle_ORM-0.44-C5F74F.svg)](https://orm.drizzle.team/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Docker](https://img.shields.io/badge/ghcr.io-secure--nestjs--drizzle--template-2496ED.svg?logo=docker&logoColor=white)](https://github.com/RamosJSouza/secure-nestjs-drizzle-template/pkgs/container/secure-nestjs-drizzle-template)
-[![Node](https://img.shields.io/badge/node-%3E%3D20.0.0-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/node-%3E%3D24.0.0-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 
 Production-ready secure backend architecture with NestJS, Drizzle ORM, RBAC, and JWT RS256.
 
@@ -51,6 +51,35 @@ Instead of assembling auth, RBAC, logging, health checks, and database patterns 
 - **Resilient Webhooks** — BullMQ async delivery with HMAC-SHA256 signing; graceful degradation when Redis is unavailable (`DISABLE_REDIS=true`).
 - **CI/CD & Security Pipeline** — GitHub Actions: lint → type-check → coverage ≥ 85% → npm audit → Docker build → Trivy scan; weekly CodeQL + Snyk scan; Dependabot for npm/Actions/Docker.
 
+## Practical Example: RBAC + Multi-Tenant Endpoint
+
+Protect a route so that users can only access **their own organization's data**, with both application-level RBAC and PostgreSQL RLS acting as independent isolation layers:
+
+```typescript
+@UseGuards(JwtAuthGuard, TenantGuard, PermissionGuard)
+@RequireTenant()                         // 403 if user has no organization
+@Controller('projects')
+export class ProjectsController {
+  @Get()
+  @RequirePermissions('project:read')    // DB-driven RBAC check
+  findAll(@Req() req: Request) {
+    const orgId = (req.user as any).organizationId;
+    return this.projectsService.findAll(orgId);
+  }
+}
+
+// Service: belt-and-suspenders — explicit WHERE + RLS
+findAll(orgId: string) {
+  return this.tenantDb.withTenant(orgId, (db) =>
+    db.select().from(projects)
+      .where(eq(projects.organizationId, orgId))  // explicit guard
+    // PostgreSQL RLS also filters via app.current_tenant session var
+  );
+}
+```
+
+See [docs/examples/rbac-multi-tenant.md](./docs/examples/rbac-multi-tenant.md) for the complete working example with DTOs, seed, RLS SQL, and E2E test.
+
 ## Architecture Snapshot
 
 - **Framework:** NestJS 11
@@ -85,6 +114,7 @@ npm run db:studio     # open Drizzle Studio
 
 ## Environment Essentials
 
+- **Node.js:** ≥ 24.0.0 (LTS Krypton) — use `.nvmrc` ou `nvm use` para fixar a versão
 - Runtime DB: `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE`, `DB_SSL`
 - Drizzle tooling: `DATABASE_URL` (optional, preferred for CLI tooling)
 - Auth keys: `PRIVATE_KEY`, `PUBLIC_KEY`
@@ -165,6 +195,15 @@ Este projeto e sua arquitetura sao mantidos por **Ramos de Souza Janones**, enge
 
 ## Documentation
 
-- English docs: `docs/en/`
-- Portugues: `docs/pt-br/`
-- Legacy mirror: `documentation/`
+| Document | Description |
+|----------|-------------|
+| [docs/en/architecture.md](./docs/en/architecture.md) | System architecture and module overview |
+| [docs/en/authentication.md](./docs/en/authentication.md) | JWT RS256 auth flow, refresh rotation, revocation |
+| [docs/en/rbac.md](./docs/en/rbac.md) | RBAC model, PermissionGuard, permission seeding |
+| [docs/en/security.md](./docs/en/security.md) | Risk engine, rate limiting, Argon2id, audit log |
+| [docs/en/observability.md](./docs/en/observability.md) | Pino logging, correlation ID, health endpoints |
+| [docs/en/configuration.md](./docs/en/configuration.md) | All environment variables with validation schema |
+| [docs/en/compliance.md](./docs/en/compliance.md) | SOC 2 / GDPR / LGPD / PCI-DSS control mapping |
+| [docs/en/deployment.md](./docs/en/deployment.md) | Railway, Render, Docker Compose deploy guide + npm publish |
+| [docs/examples/rbac-multi-tenant.md](./docs/examples/rbac-multi-tenant.md) | **Full RBAC + PostgreSQL RLS multi-tenancy example** |
+| `docs/pt-br/` | Portuguese translations of all docs |

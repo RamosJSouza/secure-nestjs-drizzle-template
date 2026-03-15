@@ -11,12 +11,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '22'
+  NODE_VERSION: '24'
 
 jobs:
-  # ─────────────────────────────────────────────
-  # Job 1: Lint + Type-check
-  # ─────────────────────────────────────────────
   lint-typecheck:
     name: Lint & Type-check
     runs-on: ubuntu-latest

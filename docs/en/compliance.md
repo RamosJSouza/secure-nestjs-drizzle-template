@@ -46,7 +46,7 @@ This document maps each compliance requirement (SOC 2 Type II, GDPR, LGPD, PCI-D
 | Principle | Implementation | Evidence |
 |-----------|---------------|---------|
 | **Integrity & Confidentiality** | Argon2id hashing (64 MiB / 3t / 4p); bcrypt migration on login | `src/users/users.service.ts` — `hashPassword()` |
-| **Data minimization** | JWT access token contains only `{sub, jti}` — no email, role, PII. Refresh token: `{sub}` only | `src/auth/auth.service.ts` — token generation |
+| **Data minimization** | JWT access token: `{sub, jti}` only — no email, role, PII in payload. Refresh token: `{sub}` only. Eliminates stale role claims and PII leakage via client-side decoding | `src/auth/auth.service.ts` — token generation |
 | **Accountability** | Append-only audit logs per action with `userId`, `action`, `entityType`, `entityId`, `details`, `createdAt` | `src/modules/audit/audit.service.ts` |
 
 ### Article 25 — Data Protection by Design
@@ -62,7 +62,7 @@ This document maps each compliance requirement (SOC 2 Type II, GDPR, LGPD, PCI-D
 | Measure | Implementation | Evidence |
 |---------|---------------|---------|
 | Pseudonymization | User IDs are UUIDs v4 (no sequential IDs); tokens use opaque JTI | Schema: `src/database/schema/users.ts` |
-| Encryption in transit | HSTS + TLS (infra-level); `upgrade-insecure-requests` CSP directive | `src/main.ts` |
+| Encryption in transit | HSTS + TLS (infra-level); `upgrade-insecure-requests` CSP directive; `style-src` and `script-src` restricted to `'self'` in production (no `'unsafe-inline'`) | `src/main.ts` |
 | Ongoing confidentiality | JTI blocklist (Redis) for immediate token revocation | `src/security/token-revocation/token-revocation.service.ts` |
 | Restoration capability | PostgreSQL with `deletedAt` soft-delete (data retained, access revoked) | `src/database/schema/users.ts` |
 | Regular testing | CI pipeline runs on every push/PR; weekly security scan via GitHub Actions | `.github/workflows/ci.yml`, `.github/workflows/security.yml` |

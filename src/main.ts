@@ -26,7 +26,7 @@ async function bootstrap() {
           directives: {
             defaultSrc: ["'self'"],
             scriptSrc: nodeEnv === 'production' ? ["'self'"] : ["'self'", "'unsafe-inline'"],
-            styleSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: nodeEnv === 'production' ? ["'self'"] : ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'", 'data:', 'https:'],
             connectSrc: ["'self'"],
             fontSrc: ["'self'"],

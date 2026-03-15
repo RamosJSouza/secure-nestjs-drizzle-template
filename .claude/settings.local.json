@@ -11,7 +11,12 @@
       "Bash(npm run:*)",
       "Bash(npm test:*)",
       "Bash(ls:*)",
-      "Bash(chmod +x:*)"
+      "Bash(chmod +x:*)",
+      "Bash(npm view:*)",
+      "Bash(npm audit:*)",
+      "Bash(npm ls:*)",
+      "Bash(npm pack:*)",
+      "Bash(then find:*)"
     ]
   }
 }

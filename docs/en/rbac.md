@@ -37,6 +37,10 @@ All mutation and sensitive read endpoints require:
 1. `JwtAuthGuard` — valid Bearer token
 2. `PermissionGuard` — specific permission via `@RequirePermissions`
 
+Tenant-scoped endpoints additionally require:
+3. `TenantGuard` — validates `organizationId` in `RequestContext`
+4. `@RequireTenant()` — returns `403` if the user has no organization
+
 ```typescript
 @Controller('roles')
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -49,11 +53,25 @@ export class RoleController {
   @RequirePermissions('rbac:create')
   create(@Body() dto: CreateRoleDto) { ... }
 }
+
+// Tenant-scoped controller (adds TenantGuard + @RequireTenant):
+@UseGuards(JwtAuthGuard, TenantGuard, PermissionGuard)
+@RequireTenant()
+@Controller('projects')
+export class ProjectsController {
+  @Get()
+  @RequirePermissions('project:read')
+  findAll(@Req() req: Request) { ... }
+}
 ```
+
+See [docs/examples/rbac-multi-tenant.md](../examples/rbac-multi-tenant.md) for a complete working example with DTOs, service, module, RLS SQL policy, and E2E isolation tests.
 
 ## Permission Check
 
 `PermissionGuard` uses `RbacService` to verify the user's Role has the required Permission in `role_permissions` with `granted = true`.
+
+> **Strict mode:** Set `PERMISSION_GUARD_STRICT=true` in env to make `PermissionGuard` fail-closed (403) when `@RequirePermissions` is absent, instead of the default fail-open with WARN log.
 
 ## RBAC Endpoints
 

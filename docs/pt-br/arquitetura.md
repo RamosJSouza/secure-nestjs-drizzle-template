@@ -2,7 +2,7 @@
 
 ## Visão Geral
 
-O Prime Nest é um backend NestJS pronto para produção, com estrutura modular voltada a escalabilidade e manutenção. O sistema suporta **multi-tenancy nativo** via PostgreSQL Row-Level Security (RLS) e isolamento de tenant no nível da aplicação, com Organizations como tenants de primeira classe.
+O NestJS Security Pro é um backend NestJS pronto para produção, com estrutura modular voltada a escalabilidade e manutenção. O sistema suporta **multi-tenancy nativo** via PostgreSQL Row-Level Security (RLS) e isolamento de tenant no nível da aplicação, com Organizations como tenants de primeira classe.
 
 ## Módulos
 
@@ -95,3 +95,8 @@ src/
 - As migrations SQL são geradas/aplicadas com `drizzle-kit` via `drizzle.config.ts`.
 - Todas as queries de usuário filtram `deletedAt IS NULL` — usuários com soft-delete são completamente excluídos.
 - As políticas RLS são DDL opcional, não gerenciadas pelo Drizzle: aplique `src/database/rls/0001_enable_rls.sql` uma vez por ambiente.
+
+## Leitura Complementar
+
+- [docs/examples/rbac-multi-tenant.md](../examples/rbac-multi-tenant.md) — Exemplo completo RBAC + PostgreSQL RLS com multi-tenancy (CRUD de Projects)
+- [docs/en/deployment.md](../en/deployment.md) — Guia de deploy Railway, Render, Docker Compose e publicação npm

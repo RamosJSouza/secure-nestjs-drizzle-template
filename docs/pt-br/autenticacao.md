@@ -13,12 +13,14 @@ O sistema utiliza JWT com **RS256**. A chave privada (`PRIVATE_KEY`) assina os t
 
 ## Payload JWT
 
+Access token (15 min):
 - `sub`: ID do usuário
-- `email`: E-mail do usuário
-- `roleId`: ID da Role atribuída *(carregado apenas para fins informativos — nunca confiado pelo servidor)*
 - `jti`: JWT ID — UUID único por token, usado para revogação imediata
 
-> **Nota:** O campo `password` é sempre removido do `req.user`. O `roleId` no claim JWT também nunca é confiado — o `JwtStrategy` sempre recarrega o usuário do banco em cada requisição. Alterações de role têm efeito imediato sem necessidade de novo login.
+Refresh token (7 dias):
+- `sub`: ID do usuário apenas
+
+> **Nota de segurança:** E-mail e `roleId` são intencionalmente excluídos de todos os payloads JWT — isso previne vazamento de PII via decodificação client-side do JWT e elimina claims de role desatualizadas no cliente. O `JwtStrategy` sempre recarrega o usuário do banco em cada requisição; a role nunca é inferida do token. Alterações de role têm efeito imediato sem necessidade de novo login. O campo `password` é sempre removido do `req.user`.
 
 ## Fluxos
 

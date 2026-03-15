@@ -40,6 +40,9 @@ No `.env`, cole o conteúdo PEM em uma linha, substituindo quebras por `\n`. Amb
 - `REDIS_PASSWORD`: Opcional
 - `DISABLE_REDIS`: Defina como `true` para desabilitar a inicialização do BullMQ (o CRUD de webhooks permanece disponível; a fila de entrega assíncrona é desativada). Útil para desenvolvimento local sem Redis.
 
+### Guards de Segurança
+- `PERMISSION_GUARD_STRICT`: Defina como `true` para que o `PermissionGuard` falhe fechado (HTTP 403) quando `@RequirePermissions` estiver ausente. Padrão: `false` (fail-open com log WARN — permite rotas protegidas por outros meios).
+
 ### E-mail (Resend)
 - `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_FROM_NAME` (opcional)
 

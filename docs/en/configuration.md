@@ -40,6 +40,9 @@ In `.env`, paste PEM content as a single line, replacing newlines with `\n`. Bot
 - `REDIS_PASSWORD`: Optional
 - `DISABLE_REDIS`: Set to `true` to skip BullMQ initialization (webhook CRUD remains available; async delivery queue is disabled). Useful for local development without Redis.
 
+### Security Guards
+- `PERMISSION_GUARD_STRICT`: Set to `true` to make `PermissionGuard` fail-closed (HTTP 403) when `@RequirePermissions` is absent. Default: `false` (fail-open with WARN log — allows routes protected by other means).
+
 ### Email (Resend)
 - `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_FROM_NAME` (optional)
 

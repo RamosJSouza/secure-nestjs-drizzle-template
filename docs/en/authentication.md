@@ -13,12 +13,14 @@ The system uses JWT with **RS256**. The private key (`PRIVATE_KEY`) signs tokens
 
 ## JWT Payload
 
+Access token (15 min):
 - `sub`: User ID
-- `email`: User email
-- `roleId`: Assigned Role ID *(carried for informational purposes — never trusted by the server)*
 - `jti`: JWT ID — unique UUID per token, used for immediate revocation
 
-> **Note:** The `password` field is always stripped from `req.user`. The `roleId` in the JWT claim is also never trusted — `JwtStrategy` always reloads the user from the database on every request. Role changes take effect immediately without re-login.
+Refresh token (7 days):
+- `sub`: User ID only
+
+> **Security note:** Email and `roleId` are intentionally excluded from all JWT payloads — this prevents PII leakage via client-side JWT decoding and eliminates stale role claims on the client. `JwtStrategy` always reloads the user from the database on every request; the role is never inferred from the token. Role changes take effect immediately without re-login. The `password` field is always stripped from `req.user`.
 
 ## Flows
 
@@ -106,6 +108,40 @@ Auth endpoints are protected by two layers of rate limiting:
 | `/auth/logout` | 300/15min per IP | 120/min (default) |
 | `/auth/register` | 300/15min per IP | Skipped (admin only) |
 | `/auth/change-password` | 300/15min per IP | 120/min (default) |
+
+## Sequence Diagram
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant AC as AuthController
+  participant AS as AuthService
+  participant SA as SuspiciousActivityService
+  participant US as UsersService
+  participant DB as Database
+  participant R as Redis
+
+  C->>+AC: POST /auth/login
+  AC->>+AS: login(dto, ip, userAgent)
+  AS->>+SA: isIpBlocked(ip)
+  SA->>R: GET sec:block:ip:{ip}
+  R-->>SA: null / blocked
+  SA-->>-AS: false / HTTP 429
+  AS->>+US: findOne(email)
+  US->>+DB: SELECT WHERE email AND deletedAt IS NULL
+  DB-->>-US: User (with hash)
+  US-->>-AS: User
+  AS->>AS: verifyPassword(plain, hash)
+  Note over AS: Argon2id.verify() or legacy bcrypt.compare()
+  AS->>AS: riskEngine.assessLoginRisk(userId, fingerprint, ip)
+  Note over AS: Blocks with HTTP 403 if level = critical
+  AS->>AS: enforceSessionLimit(userId)
+  Note over AS: Evicts oldest + revokes JTI if > 10 sessions
+  AS->>AS: jti = randomUUID()
+  AS->>DB: INSERT sessions (hash, jti, fingerprint, ip, userAgent)
+  AS-->>-AC: { access_token {sub,jti}, refresh_token {sub} }
+  AC-->>-C: 200 OK
+```
 
 ## Endpoints
 

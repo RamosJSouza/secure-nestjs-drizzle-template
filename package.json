@@ -29,6 +29,42 @@
   },
   "private": false,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RamosJSouza/secure-nestjs-drizzle-template.git"
+  },
+  "bugs": {
+    "url": "https://github.com/RamosJSouza/secure-nestjs-drizzle-template/issues"
+  },
+  "homepage": "https://github.com/RamosJSouza/secure-nestjs-drizzle-template#readme",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "dist",
+    "src",
+    "docs",
+    "drizzle.config.ts",
+    ".env.example",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "overrides": {
+    "eslint": {
+      "ajv": "^6.14.0"
+    },
+    "schema-utils@3": {
+      "ajv": "^6.14.0"
+    },
+    "@angular-devkit/core": {
+      "ajv": "^8.18.0"
+    },
+    "@eslint/config-array": {
+      "minimatch": ">=10.2.3"
+    }
+  },
   "scripts": {
     "prepare": "husky",
     "dev": "rimraf dist tsconfig.tsbuildinfo && nest start --watch",
@@ -65,7 +101,7 @@
     "@nestjs/jwt": "11.0.2",
     "@nestjs/mapped-types": "2.1.0",
     "@nestjs/passport": "11.0.5",
-    "@nestjs/platform-express": "11.1.13",
+    "@nestjs/platform-express": "^11.1.16",
     "@nestjs/schedule": "6.1.1",
     "@nestjs/swagger": "11.2.6",
     "@nestjs/terminus": "^11.0.0",
@@ -163,7 +199,7 @@
     }
   },
   "engines": {
-    "node": ">=20.0.0",
+    "node": ">=24.0.0",
     "npm": ">=10.0.0"
   }
 }

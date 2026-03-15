@@ -102,7 +102,7 @@ The `auth` limiter is applied explicitly via `@Throttle({ auth: ... })` on the c
 | Layer | Implementation |
 |-------|----------------|
 | Security headers | Helmet (CSP, HSTS, X-Frame-Options, etc.) |
-| CSP | `default-src 'self'`; `style-src` relaxed for Swagger UI in dev |
+| CSP | `default-src 'self'`; `script-src` and `style-src` include `'unsafe-inline'` in dev only (Swagger UI); production enforces `'self'` for both |
 | `crossOriginEmbedderPolicy` | Enabled in production only |
 | Rate limiting | Two-layer (see above) |
 | CORS | Restricted to `ALLOWED_ORIGINS` (required and validated in production) |

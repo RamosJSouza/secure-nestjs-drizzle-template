@@ -154,7 +154,7 @@
     "@types/pg": "^8.16.0",
     "@types/prettier": "3.0.0",
     "@types/rimraf": "4.0.5",
-    "@types/supertest": "6.0.3",
+    "@types/supertest": "7.2.0",
     "@types/swagger-ui-express": "4.1.8",
     "@typescript-eslint/eslint-plugin": "8.55.0",
     "@typescript-eslint/parser": "8.55.0",

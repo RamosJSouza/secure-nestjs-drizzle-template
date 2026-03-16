@@ -129,7 +129,7 @@
     "pino-http": "^11.0.0",
     "redis": "^5.10.0",
     "reflect-metadata": "0.2.2",
-    "resend": "^6.9.2",
+    "resend": "^6.9.3",
     "rimraf": "6.1.2",
     "rxjs": "7.8.2",
     "swagger-ui-express": "5.0.1"

@@ -1,26 +1,43 @@
 # Módulo de E-mail
 
-O sistema usa `nest-resend` para integração com [Resend](https://resend.com/).
+O sistema usa **Nodemailer** com arquitetura Ports & Adapters (`IEmailProvider` → `NodemailerAdapter` → `MailFacade`).
 
 ## Configuração
 
 Variáveis no `.env`:
-- `RESEND_API_KEY`
-- `RESEND_FROM_EMAIL`
-- `RESEND_FROM_NAME` (opcional)
+
+| Variável | Descrição |
+|----------|-----------|
+| `APP_URL` | URL base para links nos e-mails (reset, verificação) |
+| `SMTP_HOST` | Host SMTP (vazio em dev → Ethereal automático) |
+| `SMTP_PORT` | Porta SMTP (padrão `587`) |
+| `SMTP_USER` / `SMTP_PASS` | Credenciais SMTP |
+| `SMTP_FROM_EMAIL` | Remetente |
+| `SMTP_FROM_NAME` | Nome do remetente (opcional) |
+
+### Desenvolvimento
+
+Sem `SMTP_HOST`, o adapter cria conta Ethereal automaticamente. Ao enviar e-mail, a URL de preview aparece no log do servidor.
+
+### Produção
+
+Configure SMTP real (SendGrid, Amazon SES, Mailgun, etc.) e defina `APP_URL` com a URL pública da aplicação.
 
 ## Uso
 
-O `MailService` centraliza o envio de e-mails transacionais.
+Injete `MailFacade` nos serviços de auth:
 
-### Métodos disponíveis
+```typescript
+await this.mailFacade.sendPasswordResetEmail(email, resetUrl);
+await this.mailFacade.sendEmailVerificationEmail(email, verifyUrl);
+```
 
-1. **sendWelcomeEmail(email, name)**
-   - Envia e-mail de boas-vindas para novos usuários.
+## Fluxos que enviam e-mail
 
-2. **sendPasswordReset(email, token)**
-   - Envia link de recuperação de senha com o token JWT gerado.
+1. **Recuperação de senha** — `POST /auth/forgot-password` → link com token opaco (nunca JWT)
+2. **Verificação de e-mail** — `POST /auth/send-verification` → link com token opaco
 
-## Logs e erros
+## Segurança
 
-O serviço registra erros em caso de falha (API Key inválida, limite atingido). A exceção é propagada para o chamador tratar.
+- Tokens nos links são opacos (`randomBytes(32)`); apenas o hash SHA-256 é armazenado (Redis ou memória)
+- Falhas de SMTP são logadas; forgot-password não revela se o e-mail existe (sempre HTTP 202)

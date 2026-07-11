@@ -66,6 +66,37 @@ Todos os detectores de sinal falham **abertos** (retornam 0 em caso de erro) —
 
 `POST /auth/change-password` exige que o chamador forneça a **senha atual** junto com a nova senha. A senha atual é verificada antes de qualquer alteração. Isso previne tomada de conta via token de acesso roubado — mesmo com um Bearer token válido, o atacante não consegue trocar a senha sem conhecer a senha atual.
 
+Em caso de sucesso, `passwordChangedAt` é atualizado e todas as sessões ativas são revogadas via `revokeAllActiveUserSessions()`.
+
+## Recuperação de Conta (Tokens Opacos)
+
+O reset de senha **nunca** usa JWT nos links de e-mail. Tokens são aleatórios e apenas o hash SHA-256 é armazenado.
+
+| Controle | Implementação |
+|----------|---------------|
+| Anti-enumeração | `POST /auth/forgot-password` sempre retorna HTTP 202 com mensagem idêntica |
+| Normalização de timing | Delay mínimo + Argon2 dummy no caminho de miss |
+| Formato do token | `randomBytes(32)` hex → SHA-256 no Redis/memória |
+| TTL | `PASSWORD_RESET_TOKEN_TTL_SECONDS` (padrão 15 min) |
+| Uso único | Lua GET+DEL em `POST /auth/reset-password` |
+| Pós-reset | Novo hash Argon2id; revoga todas as sessões + JTIs |
+
+## Verificação de E-mail
+
+Fluxo double opt-in para confirmação de e-mail:
+
+| Etapa | Endpoint | Notas |
+|-------|----------|-------|
+| Solicitar | `POST /auth/send-verification` | Autenticado; throttled |
+| Confirmar | `POST /auth/verify-email` | Público; token opaco; define `emailVerifiedAt` |
+| Enforcement | `@RequireEmailVerification()` + `EmailVerificationGuard` | Bloqueia não verificados em rotas sensíveis |
+
+## Período de Graça após Troca de Senha
+
+Após alteração de senha, o `GracePeriodGuard` bloqueia rotas sensíveis por `PASSWORD_CHANGE_GRACE_PERIOD_HOURS` (padrão 24h), com base em `users.passwordChangedAt`. Evita abuso imediato de credencial recém-alterada.
+
+Rota demo: `POST /users/sensitive-action` exige JWT + e-mail verificado + período de graça encerrado.
+
 ## Requisitos de Senha
 
 Todos os DTOs de senha (register, change-password, create-user) exigem:

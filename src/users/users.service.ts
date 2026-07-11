@@ -22,6 +22,8 @@ const SAFE_FIELDS = {
   createdAt: users.createdAt,
   updatedAt: users.updatedAt,
   deletedAt: users.deletedAt,
+  emailVerifiedAt: users.emailVerifiedAt,
+  passwordChangedAt: users.passwordChangedAt,
 };
 
 @Injectable()
@@ -52,12 +54,6 @@ export class UsersService {
       .where(and(isNull(users.deletedAt), organizationId ? eq(users.organizationId, organizationId) : undefined));
   }
 
-  /**
-   * Find an active, non-deleted user by ID.
-   * Returns the full row (including password hash) for auth verification only.
-   * Used exclusively by changePassword to verify the current password.
-   * Callers outside of auth flows must NOT expose this object to clients.
-   */
   async findOneByIdForAuth(id: string): Promise<User | undefined> {
     const [user] = await this.dbService.db
       .select()
@@ -67,11 +63,6 @@ export class UsersService {
     return user;
   }
 
-  /**
-   * Find an active, non-deleted user by email.
-   * Returns the full row (including password hash) for auth verification only.
-   * Callers outside of auth flows must NOT expose this object to clients.
-   */
   async findOne(email: string): Promise<User | undefined> {
     const [user] = await this.dbService.db
       .select()
@@ -122,14 +113,24 @@ export class UsersService {
   }
 
   async updatePassword(userId: string, hashedPassword: string): Promise<void> {
-    await this.dbService.db.update(users).set({ password: hashedPassword }).where(eq(users.id, userId));
+    const now = new Date();
+    await this.dbService.db
+      .update(users)
+      .set({ password: hashedPassword, passwordChangedAt: now, updatedAt: now })
+      .where(eq(users.id, userId));
+  }
+
+  async markEmailVerified(userId: string): Promise<void> {
+    const now = new Date();
+    await this.dbService.db
+      .update(users)
+      .set({ emailVerifiedAt: now, updatedAt: now })
+      .where(eq(users.id, userId));
   }
 
   async remove(id: string): Promise<void> {
     const failClosed = this.tokenRevocationService.isFailClosedEnabled();
 
-    // Soft-delete, session revocation, and Redis JTI revocation share one transaction
-    // so fail-closed Redis errors roll back the soft-delete (VULN-03).
     await this.dbService.db.transaction(async (tx) => {
       await tx.update(users).set({ deletedAt: new Date(), isActive: false }).where(eq(users.id, id));
 

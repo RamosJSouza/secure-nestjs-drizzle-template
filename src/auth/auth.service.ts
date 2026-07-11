@@ -17,25 +17,14 @@ import { SuspiciousActivityService } from '@/security/detection/suspicious-activ
 import { RiskEngineService } from '@/security/risk-engine/risk-engine.service';
 import { SecurityEventService } from '@/security/events/security-event.service';
 import { TOKEN_TYPE, TOKEN_ISSUER, TOKEN_AUDIENCE } from './token-types';
+import { ARGON2_OPTIONS } from './constants/password.constants';
+import { SESSION_CREDENTIAL_FIELDS } from './constants/session.constants';
+import { revokeAllActiveUserSessions } from './utils/revoke-user-sessions';
 
 const ACCESS_TOKEN_EXPIRES = '15m';
 const REFRESH_TOKEN_EXPIRES = '7d';
 
-/** Maximum concurrent active sessions per user. Oldest is evicted when exceeded. */
 const MAX_SESSIONS_PER_USER = 10;
-
-const SESSION_CREDENTIAL_FIELDS = {
-  id: sessions.id,
-  accessTokenJti: sessions.accessTokenJti,
-  refreshTokenJti: sessions.refreshTokenJti,
-};
-
-const ARGON2_OPTIONS: argon2.Options = {
-  type: argon2.argon2id,
-  memoryCost: 65536,
-  timeCost: 3,
-  parallelism: 4,
-};
 
 @Injectable()
 export class AuthService {
@@ -288,15 +277,15 @@ export class AuthService {
 
     if (claimed.expiresAt < now) throw new UnauthorizedException('Refresh token expired');
 
-    // Revoke old credentials before rotation; fail-closed reverts the claim if Redis fails.
     const failClosed = this.tokenRevocationService.isFailClosedEnabled();
     try {
-      await this.revokeSessionCredentials([{ accessTokenJti: claimed.accessTokenJti, refreshTokenJti: claimed.refreshTokenJti }], failClosed);
+      await this.revokeSessionCredentials(
+        [{ accessTokenJti: claimed.accessTokenJti, refreshTokenJti: claimed.refreshTokenJti }],
+        failClosed,
+      );
     } catch (err) {
       this.logger.error(`JTI revocation failed during refresh for user ${claimed.userId}: ${(err as Error).message}`);
       if (failClosed) {
-        // try/catch (NOT .catch() on the query builder): the unit-test mock for
-        // `.where()` returns a plain thenable with no `.catch` method.
         try {
           await this.db.update(sessions).set({ revokedAt: null }).where(eq(sessions.id, claimed.id));
         } catch (revertErr) {
@@ -406,22 +395,21 @@ export class AuthService {
     const hashedPassword = await argon2.hash(newPassword, ARGON2_OPTIONS);
     await this.usersService.updatePassword(userId, hashedPassword);
 
-    const revoked = await this.db
-      .update(sessions)
-      .set({ revokedAt: new Date() })
-      .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
-      .returning(SESSION_CREDENTIAL_FIELDS);
+    const revokedCount = await revokeAllActiveUserSessions(
+      this.dbService,
+      this.tokenRevocationService,
+      userId,
+      (err) => this.logger.error(`JTI revocation failed on password change: ${err.message}`),
+    );
 
-    await this.revokeSessionCredentials(revoked).catch((err: Error) => this.logger.error(`JTI revocation failed on password change: ${err.message}`));
-
-    this.logger.log(`Password changed for user ${userId}. Revoked ${revoked.length} sessions.`);
+    this.logger.log(`Password changed for user ${userId}. Revoked ${revokedCount} sessions.`);
 
     await this.auditLogService.log({
       action: 'auth.password.changed',
       entityType: 'User',
       entityId: userId,
       actorUserId: userId,
-      metadata: { revokedSessions: revoked.length },
+      metadata: { revokedSessions: revokedCount },
       ip: ip ?? undefined,
       userAgent: userAgent ?? undefined,
     });

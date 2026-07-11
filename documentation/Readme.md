@@ -32,7 +32,7 @@ Technical documentation for **NestJS Security Pro** (`secure-nestjs-drizzle-temp
 | [auth.md](./auth.md) | PT-BR quick reference (synced with canonical auth docs) |
 | [rbac.md](./rbac.md) | PT-BR RBAC reference with multi-tenant patterns |
 | [config.md](./config.md) | PT-BR configuration summary |
-| [mail.md](./mail.md) | Resend email module usage |
+| [mail.md](./mail.md) | Módulo de e-mail transacional (Nodemailer / SMTP) |
 
 ### Module-specific docs
 

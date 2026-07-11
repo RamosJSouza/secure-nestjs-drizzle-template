@@ -50,6 +50,10 @@ Instead of assembling auth, RBAC, logging, health checks, and database patterns 
 - **Drizzle ORM + Migration Workflow** — predictable schema evolution with explicit SQL migrations.
 - **Multi-Tenancy via PostgreSQL RLS** — `TenantDatabaseService.withTenant()` wraps every query in a transaction with `set_config('app.current_tenant', orgId, true)`; belt-and-suspenders with explicit `WHERE organization_id` clause.
 - **Resilient Webhooks** — BullMQ async delivery with HMAC-SHA256 signing; graceful degradation when Redis is unavailable (`DISABLE_REDIS=true`).
+- **Account Recovery (Opaque Tokens)** — `POST /auth/forgot-password` always returns 202 (anti-enumeration); SHA-256 token hash in Redis; burn-after-read on reset; never JWT in email links.
+- **Email Verification (Double Opt-in)** — `POST /auth/send-verification` + `POST /auth/verify-email`; `@RequireEmailVerification()` guard for sensitive routes.
+- **Password Change Grace Period** — `GracePeriodGuard` blocks sensitive actions for 24h after password change (`passwordChangedAt`).
+- **Transactional Email (Ports & Adapters)** — Nodemailer + Ethereal in dev; SMTP in production via `MailFacade` / `IEmailProvider`.
 - **CI/CD & Security Pipeline** — GitHub Actions: lint → type-check → coverage ≥ 85% → npm audit → Docker build → Trivy scan; weekly CodeQL + Snyk scan; Dependabot for npm/Actions/Docker.
 
 ## Practical Example: RBAC + Multi-Tenant Endpoint
@@ -84,13 +88,14 @@ See [docs/examples/rbac-multi-tenant.md](./docs/examples/rbac-multi-tenant.md) f
 ## Architecture Snapshot
 
 - **Framework:** NestJS 11
-- **Database:** PostgreSQL + Drizzle ORM (10 tables, 4 migrations)
-- **Auth:** JWT RS256 (access 15m, refresh 7d) · Argon2id hashing
-- **Authorization:** RBAC (`Feature -> Permission -> RolePermission -> Role -> User`) with Redis/in-memory permission cache
-- **Cache/Infra:** Redis (optional locally via `DISABLE_REDIS=true`) · BullMQ webhooks · `AppCacheModule`
-- **Rate Limiting:** express-rate-limit (IP-level) + @nestjs/throttler (per-endpoint)
+- **Database:** PostgreSQL + Drizzle ORM (10 tables, 5 migrations)
+- **Auth:** JWT RS256 (access 15m, refresh 7d) · Argon2id · opaque recovery tokens · email verification
+- **Email:** Nodemailer (Ethereal dev / SMTP prod) via Ports & Adapters
+- **Authorization:** RBAC with Redis/in-memory permission cache
+- **Cache/Infra:** Redis (optional locally) · BullMQ webhooks · opaque token store
+- **Rate Limiting:** express-rate-limit + @nestjs/throttler
 - **Observability:** Pino + correlation ID + health endpoints
-- **Tests:** 85 unit tests (16 suites) · E2E tenant isolation in `test/`
+- **Tests:** 97 unit tests (21 suites) · E2E tenant isolation in `test/`
 
 ## Quick Start
 
@@ -122,8 +127,9 @@ npm run db:studio     # open Drizzle Studio
 - Runtime DB: `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE`, `DB_SSL`
 - Drizzle tooling: `DATABASE_URL` (optional, preferred for CLI tooling)
 - Auth keys: `PRIVATE_KEY`, `PUBLIC_KEY`
-- Cache: `RBAC_CACHE_TTL` (permission cache, default 5 min), `DISABLE_REDIS` (default `true` for local dev)
-- Security: `ALLOWED_ORIGINS` (required in production), `PERMISSION_GUARD_STRICT`, `NODE_ENV`
+- Cache: `RBAC_CACHE_TTL`, `DISABLE_REDIS` (default `true` for local dev)
+- Email: `APP_URL`, `SMTP_*`, token TTLs (`PASSWORD_RESET_TOKEN_TTL_SECONDS`, etc.)
+- Security: `ALLOWED_ORIGINS`, `PERMISSION_GUARD_STRICT`, `PASSWORD_CHANGE_GRACE_PERIOD_HOURS`, `NODE_ENV`
 
 See full details in:
 
@@ -156,6 +162,10 @@ See full details in:
 | UUID validation | `ParseUUIDPipe` on all route params |
 | Password policy | Min 8, max 72, uppercase+lowercase+digit |
 | User enumeration | Uniform error for all login failures |
+| **Forgot password** | **Always 202; opaque token SHA-256 in Redis; no JWT in email** |
+| **Reset password** | **Burn-after-read; revokes all sessions + JTIs** |
+| **Email verification** | **Double opt-in via opaque token; `@RequireEmailVerification()` guard** |
+| **Grace period** | **24h block on sensitive routes after password change** |
 | Soft-delete bypass | `deletedAt` + `isActive` set atomically |
 | Password in req.user | Stripped in `JwtStrategy.validate()` |
 | Role staleness | DB reload on every request — JWT `roleId` never trusted |
@@ -167,22 +177,6 @@ See full details in:
 - Provide structured logs and trace IDs for incident response and security operations.
 - Establish a reusable backend baseline for regulated product teams.
 
-## 📚 Deep Dive & Tutorials
-
-Technical references from Ramos da Informatica (replace/add links as needed):
-
-- [Security in Docker: Lessons from Real Incidents](https://ramosdainformatica.com.br/seguranca-em-docker-licoes-de-incidentes-reais/)
-- [How to Install and Configure SonarQube for Node.js Projects](https://ramosdainformatica.com.br/como-instalar-e-configurar-sonarqube-para-projetos-node-js/)
-- [Redis Performance with Relational Databases](https://ramosdainformatica.com.br/performance-em-aplicacoes-com-bancos-de-dados-relacionais-usando-redis/)
-- [Kubernetes Explained with Practical Diagrams](https://ramosdainformatica.com.br/kubernetes-explicado-com-diagramas-que-fazem-sentido/)
-- [Elasticsearch with Node.js: Practical Guide](https://ramosdainformatica.com.br/o-que-e-o-elasticsearch-e-como-instalar-e-utilizar-com-o-node/)
-
-Placeholders to customize with your own authority content:
-
-- [NestJS Security Blueprint for SOC2](https://ramosdainformatica.com.br/nestjs-security-blueprint-arquitetura-de-backend-pronta-para-soc2/)
-- [JWT Rotation and Session Defense in Practice](https://ramosdainformatica.com.br/rotacao-de-jwt-e-defesa-de-sessao-na-pratica-com-nestjs/)
-
-
 ## Security
 
 For vulnerability disclosure, see [SECURITY.md](./SECURITY.md). Compliance evidence and audit trail documentation: [docs/en/compliance.md](./docs/en/compliance.md).
@@ -192,11 +186,12 @@ For vulnerability disclosure, see [SECURITY.md](./SECURITY.md). Compliance evide
 - **Contribute:** open issues, improve docs, add tests, or submit hardening improvements via PR.
 - **Consulting:** if your team needs secure architecture, compliance-focused backend design, or modernization support, reach out:
   - Website: [ramosdainformatica.com.br](https://ramosdainformatica.com.br/)
-  - LinkedIn: [Ramos de Souza Janones](https://www.linkedin.com/in/ramos-souza/)
+  - LinkedIn: [Ramos de Souza Janones](https://www.linkedin.com/in/ramos-souza/) — newsletter on Software Engineering & AI
+  - GitHub: [@RamosJSouza](https://github.com/RamosJSouza)
 
 ## Authority Note (PT-BR)
 
-Este projeto e sua arquitetura sao mantidos por **Ramos de Souza Janones**, engenheiro senior com foco em Node.js/NestJS, seguranca de aplicacoes e arquiteturas prontas para producao e auditoria.
+Este projeto e sua arquitetura são mantidos por **Ramos de Souza Janones**, engenheiro Full Stack Sênior com 30+ anos de trajetória tecnológica e 7+ anos de especialização em TypeScript/NestJS/React. Experiência comprovada em fintech (PIX Bradesco/Wipro), healthtech (Digitalcare2u) e SaaS B2B multi-tenant (Limify). Publica newsletter no LinkedIn sobre **engenharia de software e Inteligência Artificial**: [linkedin.com/in/ramos-souza](https://www.linkedin.com/in/ramos-souza/).
 
 ## Documentation
 

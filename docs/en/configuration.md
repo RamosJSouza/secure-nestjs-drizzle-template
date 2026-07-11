@@ -46,8 +46,20 @@ In `.env`, paste PEM content as a single line, replacing newlines with `\n`. Bot
 ### Security Guards
 - `PERMISSION_GUARD_STRICT`: Set to `true` to make `PermissionGuard` fail-closed (HTTP 403) when `@RequirePermissions` is absent. Default: `false` (fail-open with WARN log — allows routes protected by other means).
 
-### Email (Resend)
-- `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_FROM_NAME` (optional)
+### Application URL
+- `APP_URL`: Base URL for links in transactional emails (password reset, email verification). Default: `http://localhost:3000`
+
+### Email (Nodemailer / SMTP)
+- `SMTP_HOST`, `SMTP_PORT` (default `587`), `SMTP_USER`, `SMTP_PASS`
+- `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME` (optional display name)
+- **Development:** when `SMTP_HOST` is empty, `NodemailerAdapter` creates an Ethereal test account automatically; preview URL is logged to the console.
+- **Production:** configure real SMTP credentials; links use `APP_URL`.
+
+### Account Recovery & Verification
+- `PASSWORD_RESET_TOKEN_TTL_SECONDS`: Opaque reset token TTL. Default: `900` (15 min)
+- `EMAIL_VERIFICATION_TOKEN_TTL_SECONDS`: Verification token TTL. Default: `86400` (24 h)
+- `PASSWORD_CHANGE_GRACE_PERIOD_HOURS`: Hours after password change during which sensitive routes are blocked. Default: `24`
+- `FORGOT_PASSWORD_MIN_RESPONSE_MS`: Minimum response time for forgot-password (timing attack mitigation). Default: `250`
 
 ## Validation
 

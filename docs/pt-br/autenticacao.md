@@ -152,3 +152,26 @@ sequenceDiagram
 | POST | /auth/logout | Sim (Bearer) | Revogar sessão atual |
 | POST | /auth/register | Sim + perm | Criar usuário (users:create) |
 | POST | /auth/change-password | Sim (Bearer) | Alterar senha do usuário autenticado |
+| POST | /auth/forgot-password | Não | Solicitar reset (sempre 202, anti-enumeração) |
+| POST | /auth/reset-password | Não | Redefinir senha com token opaco (revoga sessões) |
+| POST | /auth/send-verification | Sim (Bearer) | Enviar link de verificação de e-mail |
+| POST | /auth/verify-email | Não | Confirmar e-mail com token opaco |
+
+## Recuperação de Senha (Tokens Opacos)
+
+O reset usa **tokens opacos**, não JWT:
+
+1. `POST /auth/forgot-password` — sempre retorna `202 Accepted` com a mesma mensagem, exista ou não o e-mail. Tempo de resposta normalizado (delay mínimo + Argon2 dummy no miss).
+2. Token hex de 64 chars enviado por e-mail; apenas o hash SHA-256 fica no Redis (TTL 15 min) mapeado ao `userId`.
+3. `POST /auth/reset-password` — consome o token atomicamente (burn-after-read), aplica Argon2id, atualiza `passwordChangedAt` e revoga todas as sessões + JTIs.
+
+## Verificação de E-mail
+
+1. `POST /auth/send-verification` (autenticado) — envia link se `emailVerifiedAt` for null.
+2. Token no Redis (TTL 24h) com o mesmo padrão opaco.
+3. `POST /auth/verify-email` — define `emailVerifiedAt`.
+4. Rotas com `@RequireEmailVerification()` retornam HTTP 403 para usuários não verificados.
+
+## Período de Carência pós-Senha
+
+O `GracePeriodGuard` bloqueia ações sensíveis por **24 horas** após `passwordChangedAt` (`PASSWORD_CHANGE_GRACE_PERIOD_HOURS`). Rota demo: `POST /users/sensitive-action` (JWT + e-mail verificado + carência expirada).

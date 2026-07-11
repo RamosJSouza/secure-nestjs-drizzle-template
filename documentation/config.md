@@ -40,8 +40,16 @@ No `.env`, cole o PEM em uma linha com `\n` no lugar das quebras.
 ### Segurança
 - `PERMISSION_GUARD_STRICT`: `true` → `PermissionGuard` fail-closed quando `@RequirePermissions` ausente
 
-### E-mail (Resend, opcional)
-- `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_FROM_NAME`
+### E-mail (Nodemailer / SMTP)
+- `APP_URL`: URL base para links nos e-mails
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME`
+- Dev sem SMTP → Ethereal automático (preview URL no log)
+
+### Recuperação e verificação
+- `PASSWORD_RESET_TOKEN_TTL_SECONDS` (padrão 900)
+- `EMAIL_VERIFICATION_TOKEN_TTL_SECONDS` (padrão 86400)
+- `PASSWORD_CHANGE_GRACE_PERIOD_HOURS` (padrão 24)
+- `FORGOT_PASSWORD_MIN_RESPONSE_MS` (padrão 250)
 
 ## Validação Joi
 

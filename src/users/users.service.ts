@@ -147,12 +147,8 @@ export class UsersService {
   async remove(id: string): Promise<void> {
     const failClosed = this.tokenRevocationService.isFailClosedEnabled();
 
-    // Soft-delete + session revocation + Redis JTI revocation all inside ONE
-    // transaction. If revokeMany fails in fail-closed mode, the rejection
-    // propagates and drizzle rolls back the soft-delete (so the user is NOT
-    // left half-deleted with live credentials). In fail-open mode
-    // (DISABLE_REDIS=true), revocation failure is logged but the soft-delete
-    // commits — bounded by the 15-minute access-token TTL.
+    // Soft-delete, session revocation, and Redis JTI revocation share one transaction
+    // so fail-closed Redis errors roll back the soft-delete (VULN-03).
     await this.dbService.db.transaction(async (tx) => {
       await tx
         .update(users)
@@ -173,21 +169,16 @@ export class UsersService {
         .flatMap((s) => [s.accessTokenJti, s.refreshTokenJti])
         .filter((j): j is string => !!j);
 
-      if (jtis.length > 0) {
-        try {
-          await this.tokenRevocationService.revokeMany(
-            jtis,
-            TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS,
-            failClosed,
-          );
-        } catch (err) {
-          if (!failClosed) {
-            // fail-open: soft-delete still revokes sessions in DB; only the
-            // Redis JTI list is stale (bounded by the access-token TTL).
-            return;
-          }
-          throw err;
-        }
+      if (jtis.length === 0) return;
+
+      try {
+        await this.tokenRevocationService.revokeMany(
+          jtis,
+          TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS,
+          failClosed,
+        );
+      } catch (err) {
+        if (failClosed) throw err;
       }
     });
   }

@@ -11,15 +11,8 @@ export const sessions = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     refreshTokenHash: text('refresh_token_hash').notNull(),
 
-    // JTI of the access token issued at session creation.
-    // Stored so that on logout/password-change we can add it to the Redis
-    // revocation list and immediately invalidate the stateless access token.
+    // JTIs for Redis revocation on logout, password change, or soft-delete.
     accessTokenJti: text('access_token_jti'),
-
-    // JTI of the refresh token issued at session creation. With refresh tokens
-    // now carrying a jti (VULN-01), storing it lets us revoke BOTH credentials
-    // atomically on logout/password-change/soft-delete, so a stolen refresh
-    // token can no longer be replayed as an access token after revocation.
     refreshTokenJti: text('refresh_token_jti'),
 
     // Tenant the session belongs to. Copied from the user at session creation

@@ -311,7 +311,6 @@ describe('AuthService', () => {
         service.refresh({ refresh_token: 'valid-token' }),
       ).rejects.toMatchObject({ status: HttpStatus.SERVICE_UNAVAILABLE });
 
-      // The session claim must be reverted so the client can retry with the same R.
       expect(mockUpdate).toHaveBeenCalledWith(sessions);
       failClosedSpy.mockRestore();
     });
@@ -400,7 +399,7 @@ describe('AuthService', () => {
     });
   });
 
-  describe('token claims (VULN-01)', () => {
+  describe('token signing', () => {
     afterEach(() => {
       jest.restoreAllMocks();
     });
@@ -440,13 +439,12 @@ describe('AuthService', () => {
     });
   });
 
-  describe('revokeSessionCredentials helper (VULN-01)', () => {
+  describe('session credential revocation', () => {
     it('revokes both access and refresh JTIs when both are present', async () => {
       const rows = [
         { id: 's1', accessTokenJti: 'a1', refreshTokenJti: 'r1' },
         { id: 's2', accessTokenJti: 'a2', refreshTokenJti: null },
       ];
-      // helper is private; exercise it indirectly via changePassword which calls it.
       mockUsersService.findOneByIdForAuth.mockResolvedValueOnce({
         id: 'u',
         password: '$argon2id$mock',
@@ -454,7 +452,7 @@ describe('AuthService', () => {
       });
       const argon2 = require('argon2');
       argon2.verify.mockResolvedValue(true);
-      mockUpdateReturning.mockResolvedValueOnce(rows); // sessions revoked in changePassword
+      mockUpdateReturning.mockResolvedValueOnce(rows);
 
       await service.changePassword('u', 'cur', 'New-Pass1');
 

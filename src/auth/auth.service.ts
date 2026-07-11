@@ -31,6 +31,12 @@ const REFRESH_TOKEN_EXPIRES = '7d';
 /** Maximum concurrent active sessions per user. Oldest is evicted when exceeded. */
 const MAX_SESSIONS_PER_USER = 10;
 
+const SESSION_CREDENTIAL_FIELDS = {
+  id: sessions.id,
+  accessTokenJti: sessions.accessTokenJti,
+  refreshTokenJti: sessions.refreshTokenJti,
+};
+
 const ARGON2_OPTIONS: argon2.Options = {
   type: argon2.argon2id,
   memoryCost: 65536, 
@@ -154,11 +160,7 @@ export class AuthService {
       .update(sessions)
       .set({ revokedAt: new Date() })
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
-      .returning({
-        id: sessions.id,
-        accessTokenJti: sessions.accessTokenJti,
-        refreshTokenJti: sessions.refreshTokenJti,
-      });
+      .returning(SESSION_CREDENTIAL_FIELDS);
 
     await this.revokeSessionCredentials(revokedSessions).catch((err: Error) =>
       this.logger.error(`JTI revocation failed during reuse cleanup: ${err.message}`),
@@ -181,11 +183,7 @@ export class AuthService {
 
   private async enforceSessionLimit(userId: string, ip?: string): Promise<void> {
     const activeSessions = await this.db
-      .select({
-        id: sessions.id,
-        accessTokenJti: sessions.accessTokenJti,
-        refreshTokenJti: sessions.refreshTokenJti,
-      })
+      .select(SESSION_CREDENTIAL_FIELDS)
       .from(sessions)
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
       .orderBy(asc(sessions.createdAt));
@@ -274,11 +272,7 @@ export class AuthService {
 
     if (risk.level === 'critical') {
       const activeSessions = await this.db
-        .select({
-          id: sessions.id,
-          accessTokenJti: sessions.accessTokenJti,
-          refreshTokenJti: sessions.refreshTokenJti,
-        })
+        .select(SESSION_CREDENTIAL_FIELDS)
         .from(sessions)
         .where(and(eq(sessions.userId, user.id), isNull(sessions.revokedAt)));
 
@@ -362,10 +356,7 @@ export class AuthService {
 
     if (claimed.expiresAt < now) throw new UnauthorizedException('Refresh token expired');
 
-    // Revoke the OLD session's access+refresh JTIs before issuing new tokens
-    // (VULN-01): a stolen refresh token must not remain replayable as an access
-    // token after rotation. Fail-closed so rotation isn't reported successful
-    // until revocation is confirmed; on failure, revert the atomic claim.
+    // Revoke old credentials before rotation; fail-closed reverts the claim if Redis fails.
     const failClosed = this.tokenRevocationService.isFailClosedEnabled();
     try {
       await this.revokeSessionCredentials(
@@ -392,7 +383,6 @@ export class AuthService {
           HttpStatus.SERVICE_UNAVAILABLE,
         );
       }
-      // fail-open (DISABLE_REDIS=true): fall through — bounded by the access TTL.
     }
 
     const user = await this.usersService.findById(claimed.userId);
@@ -406,11 +396,7 @@ export class AuthService {
     const tokenHash = this.hashRefreshToken(refreshToken);
 
     const [session] = await this.db
-      .select({
-        id: sessions.id,
-        accessTokenJti: sessions.accessTokenJti,
-        refreshTokenJti: sessions.refreshTokenJti,
-      })
+      .select(SESSION_CREDENTIAL_FIELDS)
       .from(sessions)
       .where(
         and(
@@ -520,11 +506,7 @@ export class AuthService {
       .update(sessions)
       .set({ revokedAt: new Date() })
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
-      .returning({
-        id: sessions.id,
-        accessTokenJti: sessions.accessTokenJti,
-        refreshTokenJti: sessions.refreshTokenJti,
-      });
+      .returning(SESSION_CREDENTIAL_FIELDS);
 
     await this.revokeSessionCredentials(revoked).catch((err: Error) =>
       this.logger.error(`JTI revocation failed on password change: ${err.message}`),

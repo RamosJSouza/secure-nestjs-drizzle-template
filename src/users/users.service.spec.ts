@@ -144,7 +144,7 @@ describe('UsersService', () => {
       mockTokenRevocationService.isFailClosedEnabled.mockReturnValue(true);
     });
 
-    it('soft-deletes the user (sets deletedAt) inside a transaction', async () => {
+    it('soft-deletes the user inside a transaction', async () => {
       const id = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
       await service.remove(id);
 
@@ -154,25 +154,8 @@ describe('UsersService', () => {
         expect.objectContaining({ deletedAt: expect.any(Date) }),
       );
     });
-  });
 
-  describe('remove (VULN-03 revocation)', () => {
-    const returningMock = jest.fn();
-    const txMock = {
-      update: jest.fn().mockReturnThis(),
-      set: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnValue({ returning: returningMock }),
-    };
-
-    beforeEach(() => {
-      jest.clearAllMocks();
-      mockDb.transaction = jest.fn(async (fn: any) => fn(txMock));
-      returningMock.mockResolvedValue([]);
-      mockTokenRevocationService.revokeMany.mockResolvedValue(undefined);
-      mockTokenRevocationService.isFailClosedEnabled.mockReturnValue(true);
-    });
-
-    it('revokes all active sessions AND sends both access+refresh JTIs to Redis', async () => {
+    it('revokes access and refresh JTIs for all active sessions', async () => {
       returningMock.mockResolvedValueOnce([
         { id: 's1', accessTokenJti: 'a1', refreshTokenJti: 'r1' },
         { id: 's2', accessTokenJti: null, refreshTokenJti: 'r2' },
@@ -180,27 +163,25 @@ describe('UsersService', () => {
 
       await service.remove('user-uuid');
 
-      expect(txMock.update).toHaveBeenCalledTimes(2); // users + sessions
+      expect(txMock.update).toHaveBeenCalledTimes(2);
       expect(mockTokenRevocationService.revokeMany).toHaveBeenCalledWith(
         expect.arrayContaining(['a1', 'r1', 'r2']),
         expect.any(Number),
-        true, // failClosed
+        true,
       );
     });
 
-    it('rolls back (rethrows) when Redis revocation fails in fail-closed mode', async () => {
+    it('rethrows when Redis revocation fails in fail-closed mode', async () => {
       returningMock.mockResolvedValueOnce([
         { id: 's1', accessTokenJti: 'a1', refreshTokenJti: 'r1' },
       ]);
       mockTokenRevocationService.revokeMany.mockRejectedValueOnce(new Error('redis down'));
 
-      // revokeMany is awaited INSIDE the tx callback -> its rejection propagates
-      // -> drizzle rolls back the soft-delete + session revocation.
       await expect(service.remove('user-uuid')).rejects.toThrow('redis down');
     });
   });
 
-  describe('tenant scoping (VULN-03)', () => {
+  describe('tenant scoping', () => {
     afterEach(() => {
       jest.restoreAllMocks();
     });
@@ -210,7 +191,6 @@ describe('UsersService', () => {
 
       mockWhere.mockClear();
 
-      // With org context: findAll must read it and pass a truthy AND-condition to where().
       await RequestContext.run({ correlationId: 't', organizationId: 'org-123' }, () =>
         service.findAll(),
       );
@@ -218,10 +198,8 @@ describe('UsersService', () => {
       expect(getOrgSpy).toHaveBeenCalled();
       expect(mockWhere).toHaveBeenCalled();
       const calls = mockWhere.mock.calls;
-      const withOrgArg = calls[calls.length - 1]?.[0];
-      expect(withOrgArg).toBeTruthy(); // the `and(isNull(deletedAt), eq(org, 'org-123'))` object
+      expect(calls[calls.length - 1]?.[0]).toBeTruthy();
 
-      // Without org context: findAll still filters by deletedAt; org filter is absent.
       mockWhere.mockClear();
       getOrgSpy.mockClear();
       await RequestContext.run({ correlationId: 't' }, () => service.findAll());

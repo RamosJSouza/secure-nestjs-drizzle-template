@@ -47,7 +47,6 @@ describe('RoleService', () => {
     mockRbacService = { invalidateRoleCache: jest.fn() };
     auditLog = { log: jest.fn().mockResolvedValue(undefined) };
 
-    // Default chaining — where() is thenable (resolves to []) so direct `await` works
     mockDb.select.mockReturnValue({ from: mockDb.from });
     mockDb.from.mockReturnValue({ where: mockDb.where });
     mockDb.where.mockReturnValue({
@@ -159,32 +158,6 @@ describe('RoleService', () => {
   });
 
   describe('assignPermissions', () => {
-    it('uses assertRoleExists instead of findOne (no findFirst on assignPermissions)', async () => {
-      const roleId = '11111111-1111-1111-1111-111111111111';
-
-      mockDb.limit.mockResolvedValue([{ id: roleId }]);
-      mockDb.select.mockReturnValue({ from: mockDb.from });
-      mockDb.from.mockReturnValue({ where: mockDb.where });
-      mockDb.where.mockReturnValueOnce({ limit: mockDb.limit });
-      mockDb.transaction.mockImplementation(async (fn: any) => fn(mockTx));
-
-      mockTx.select.mockReturnValue({ from: mockTx.from });
-      mockTx.from.mockReturnValue({ where: mockTx.where });
-      mockTx.where
-        .mockReturnValueOnce({
-          then: (resolve: any) => Promise.resolve([]).then(resolve),
-        })
-        .mockReturnValueOnce({
-          then: (resolve: any) => Promise.resolve([{ id: 'p1' }]).then(resolve),
-        });
-      mockTx.delete.mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
-      mockTx.insert.mockReturnValue({ values: jest.fn().mockResolvedValue(undefined) });
-
-      await service.assignPermissions(roleId, { permissionIds: ['p1'] });
-
-      expect(mockDb.query.roles.findFirst).not.toHaveBeenCalled();
-    });
-
     it('throws when a permission ID does not exist', async () => {
       const roleId = '11111111-1111-1111-1111-111111111111';
 

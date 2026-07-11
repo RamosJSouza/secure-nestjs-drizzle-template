@@ -10,7 +10,7 @@ import { redisStore } from 'cache-manager-ioredis-yet';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: async (config: ConfigService) => {
-        const ttl = config.get<number>('RBAC_CACHE_TTL', 300_000);
+        const ttl = config.get<number>('rbac.cacheTtl', 300_000);
         const redisDisabled = config.get<string>('DISABLE_REDIS') === 'true';
 
         if (redisDisabled) {
@@ -19,9 +19,9 @@ import { redisStore } from 'cache-manager-ioredis-yet';
 
         return {
           store: await redisStore({
-            host: config.get<string>('REDIS_HOST', 'localhost'),
-            port: config.get<number>('REDIS_PORT', 6379),
-            password: config.get<string>('REDIS_PASSWORD') || undefined,
+            host: config.get<string>('redis.host', 'localhost'),
+            port: config.get<number>('redis.port', 6379),
+            password: config.get<string>('redis.password') || undefined,
             ttl,
           }),
           ttl,

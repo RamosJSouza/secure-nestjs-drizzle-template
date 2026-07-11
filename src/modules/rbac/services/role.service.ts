@@ -140,17 +140,14 @@ export class RoleService {
     await this.assertRoleExists(roleId);
 
     const uniquePermissionIds = [...new Set(dto.permissionIds)];
-    let beforeIds: string[] = [];
-    let added: string[] = [];
-    let removed: string[] = [];
 
-    await this.db.transaction(async (tx) => {
-      const before = await tx
-        .select({ permissionId: rolePermissions.permissionId })
-        .from(rolePermissions)
-        .where(eq(rolePermissions.roleId, roleId));
-
-      beforeIds = before.map((r) => r.permissionId);
+    const beforeIds = await this.db.transaction(async (tx) => {
+      const previousIds = (
+        await tx
+          .select({ permissionId: rolePermissions.permissionId })
+          .from(rolePermissions)
+          .where(eq(rolePermissions.roleId, roleId))
+      ).map(({ permissionId }) => permissionId);
 
       if (uniquePermissionIds.length > 0) {
         const valid = await tx
@@ -174,10 +171,14 @@ export class RoleService {
           })),
         );
       }
+
+      return previousIds;
     });
 
-    added = uniquePermissionIds.filter((id) => !beforeIds.includes(id));
-    removed = beforeIds.filter((id) => !uniquePermissionIds.includes(id));
+    const beforeSet = new Set(beforeIds);
+    const nextSet = new Set(uniquePermissionIds);
+    const added = uniquePermissionIds.filter((id) => !beforeSet.has(id));
+    const removed = beforeIds.filter((id) => !nextSet.has(id));
 
     await this.rbacService.invalidateRoleCache(roleId);
 

@@ -20,7 +20,15 @@ export class RbacService {
     private cacheManager: Cache,
     private configService: ConfigService,
   ) {
-    this.ttl = this.configService.get<number>('RBAC_CACHE_TTL', 300000);
+    this.ttl = this.configService.get<number>('rbac.cacheTtl', 300_000);
+  }
+
+  private rolePermissionsCacheKey(roleId: string): string {
+    return `rbac:role:${roleId}:permissions`;
+  }
+
+  private async invalidateRoleCaches(roleIds: Iterable<string>): Promise<void> {
+    await Promise.all([...new Set(roleIds)].map((id) => this.invalidateRoleCache(id)));
   }
 
   async checkPermissions(roleId: string, requiredPermissions: string[]): Promise<boolean> {
@@ -39,7 +47,7 @@ export class RbacService {
   }
 
   async getPermissionsForRole(roleId: string): Promise<string[]> {
-    const cacheKey = `rbac:role:${roleId}:permissions`;
+    const cacheKey = this.rolePermissionsCacheKey(roleId);
 
     try {
       const cached = await this.cacheManager.get<string[]>(cacheKey);
@@ -53,8 +61,9 @@ export class RbacService {
       );
     }
 
-    if (this.pendingRequests.has(cacheKey)) {
-      return this.pendingRequests.get(cacheKey)!;
+    const pending = this.pendingRequests.get(cacheKey);
+    if (pending) {
+      return pending;
     }
 
     const fetchPromise = (async () => {
@@ -87,7 +96,7 @@ export class RbacService {
   }
 
   async invalidateRoleCache(roleId: string): Promise<void> {
-    const cacheKey = `rbac:role:${roleId}:permissions`;
+    const cacheKey = this.rolePermissionsCacheKey(roleId);
     this.pendingRequests.delete(cacheKey);
 
     try {
@@ -104,7 +113,7 @@ export class RbacService {
       .from(rolePermissions)
       .where(eq(rolePermissions.permissionId, permissionId));
 
-    await Promise.all(rows.map((r) => this.invalidateRoleCache(r.roleId)));
+    await this.invalidateRoleCaches(rows.map(({ roleId }) => roleId));
   }
 
   async invalidateRolesForFeature(featureId: string): Promise<void> {
@@ -114,7 +123,6 @@ export class RbacService {
       .innerJoin(permissions, eq(permissions.id, rolePermissions.permissionId))
       .where(eq(permissions.featureId, featureId));
 
-    const uniqueRoleIds = [...new Set(rows.map((r) => r.roleId))];
-    await Promise.all(uniqueRoleIds.map((roleId) => this.invalidateRoleCache(roleId)));
+    await this.invalidateRoleCaches(rows.map(({ roleId }) => roleId));
   }
 }

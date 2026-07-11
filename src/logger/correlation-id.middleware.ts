@@ -3,7 +3,9 @@ import { Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'crypto';
 import { RequestContext } from './request-context';
 
+// Express 5 type augmentation requires the global Express namespace declaration.
 declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       correlationId?: string;

@@ -27,6 +27,18 @@ export class RoleService {
     return this.dbService.db;
   }
 
+  private async assertRoleExists(roleId: string): Promise<void> {
+    const [row] = await this.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.id, roleId))
+      .limit(1);
+
+    if (!row) {
+      throw new NotFoundException(`Role with ID "${roleId}" not found`);
+    }
+  }
+
   async create(dto: CreateRoleDto): Promise<Role> {
     return this.db.transaction(async (tx) => {
       const [existing] = await tx
@@ -82,7 +94,7 @@ export class RoleService {
   }
 
   async update(id: string, dto: UpdateRoleDto): Promise<Role> {
-    await this.findOne(id);
+    await this.assertRoleExists(id);
 
     if (dto.name) {
       const [existing] = await this.db
@@ -111,7 +123,7 @@ export class RoleService {
   }
 
   async remove(id: string): Promise<void> {
-    await this.findOne(id);
+    await this.assertRoleExists(id);
 
     const [{ value: userCount }] = await this.db
       .select({ value: count() })
@@ -133,7 +145,7 @@ export class RoleService {
     dto: AssignPermissionsDto,
     currentUserId?: string,
   ): Promise<void> {
-    await this.findOne(roleId);
+    await this.assertRoleExists(roleId);
 
     // Capture current state for audit diff (V-6: RBAC change audit trail)
     const before = await this.db

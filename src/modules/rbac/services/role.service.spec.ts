@@ -103,16 +103,25 @@ describe('RoleService', () => {
   });
 
   it('should not delete role if users are assigned', async () => {
-    mockDb.query.roles.findFirst.mockResolvedValue({ id: 'role-1', name: 'Admin' });
+    mockDb.limit.mockResolvedValue([{ id: 'role-1' }]);
     mockDb.select.mockReturnValue({ from: mockDb.from });
     mockDb.from.mockReturnValue({ where: mockDb.where });
-    mockDb.where.mockResolvedValue([{ value: 5 }]);
+    mockDb.where.mockReturnValueOnce({ limit: mockDb.limit });
+    mockDb.where.mockReturnValueOnce({
+      then: (resolve: any) => Promise.resolve([{ value: 5 }]).then(resolve),
+    });
 
     await expect(service.remove('role-1')).rejects.toThrow(ConflictException);
   });
 
   it('should assign permissions transactionally', async () => {
-    mockDb.query.roles.findFirst.mockResolvedValue({ id: 'role-1', name: 'Admin' });
+    mockDb.limit.mockResolvedValue([{ id: 'role-1' }]);
+    mockDb.select.mockReturnValue({ from: mockDb.from });
+    mockDb.from.mockReturnValue({ where: mockDb.where });
+    mockDb.where.mockReturnValueOnce({ limit: mockDb.limit });
+    mockDb.where.mockReturnValueOnce({
+      then: (resolve: any) => Promise.resolve([]).then(resolve),
+    });
 
     mockTx.delete.mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
     mockTx.insert.mockReturnValue({ values: jest.fn().mockResolvedValue(undefined) });
@@ -124,13 +133,33 @@ describe('RoleService', () => {
   });
 
   describe('assignPermissions', () => {
+    it('uses assertRoleExists instead of findOne (no findFirst on assignPermissions)', async () => {
+      const roleId = '11111111-1111-1111-1111-111111111111';
+
+      mockDb.limit.mockResolvedValue([{ id: roleId }]);
+      mockDb.select.mockReturnValue({ from: mockDb.from });
+      mockDb.from.mockReturnValue({ where: mockDb.where });
+      mockDb.where.mockReturnValueOnce({ limit: mockDb.limit });
+      mockDb.where.mockReturnValueOnce({
+        then: (resolve: any) => Promise.resolve([]).then(resolve),
+      });
+      mockDb.transaction.mockImplementation(async (fn: any) => fn(mockTx));
+      mockTx.delete.mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
+      mockTx.insert.mockReturnValue({ values: jest.fn().mockResolvedValue(undefined) });
+
+      await service.assignPermissions(roleId, { permissionIds: ['p1'] });
+
+      expect(mockDb.query.roles.findFirst).not.toHaveBeenCalled();
+    });
+
     it('logs audit once with diff metadata and actorUserId', async () => {
       const roleId = '11111111-1111-1111-1111-111111111111';
       const actorId = '22222222-2222-2222-2222-222222222222';
 
-      mockDb.query.roles.findFirst.mockResolvedValue({ id: roleId, name: 'Editor' });
+      mockDb.limit.mockResolvedValue([{ id: roleId }]);
       mockDb.select.mockReturnValue({ from: mockDb.from });
       mockDb.from.mockReturnValue({ where: mockDb.where });
+      mockDb.where.mockReturnValueOnce({ limit: mockDb.limit });
       mockDb.where.mockReturnValueOnce({
         then: (resolve: any) => Promise.resolve([{ permissionId: 'aaa' }]).then(resolve),
       });

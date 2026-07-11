@@ -84,12 +84,13 @@ See [docs/examples/rbac-multi-tenant.md](./docs/examples/rbac-multi-tenant.md) f
 ## Architecture Snapshot
 
 - **Framework:** NestJS 11
-- **Database:** PostgreSQL + Drizzle ORM
+- **Database:** PostgreSQL + Drizzle ORM (10 tables, 4 migrations)
 - **Auth:** JWT RS256 (access 15m, refresh 7d) · Argon2id hashing
-- **Authorization:** RBAC (`Feature -> Permission -> RolePermission -> Role -> User`)
-- **Cache/Infra:** Redis
+- **Authorization:** RBAC (`Feature -> Permission -> RolePermission -> Role -> User`) with Redis/in-memory permission cache
+- **Cache/Infra:** Redis (optional locally via `DISABLE_REDIS=true`) · BullMQ webhooks · `AppCacheModule`
 - **Rate Limiting:** express-rate-limit (IP-level) + @nestjs/throttler (per-endpoint)
 - **Observability:** Pino + correlation ID + health endpoints
+- **Tests:** 85 unit tests (16 suites) · E2E tenant isolation in `test/`
 
 ## Quick Start
 
@@ -102,6 +103,8 @@ npm run db:migrate
 npm run seed:rbac
 npm run dev
 ```
+
+Default seed creates roles (Super Admin, Manager, Viewer) and an admin user via `npm run seed:rbac`. **Change these credentials immediately** — see `src/migrations/seeds/rbac.seed.ts`.
 
 Open API docs: `http://localhost:3000/api/docs` *(development only — disabled in production)*
 
@@ -119,7 +122,8 @@ npm run db:studio     # open Drizzle Studio
 - Runtime DB: `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE`, `DB_SSL`
 - Drizzle tooling: `DATABASE_URL` (optional, preferred for CLI tooling)
 - Auth keys: `PRIVATE_KEY`, `PUBLIC_KEY`
-- Security: `ALLOWED_ORIGINS` (required in production), `NODE_ENV`
+- Cache: `RBAC_CACHE_TTL` (permission cache, default 5 min), `DISABLE_REDIS` (default `true` for local dev)
+- Security: `ALLOWED_ORIGINS` (required in production), `PERMISSION_GUARD_STRICT`, `NODE_ENV`
 
 See full details in:
 

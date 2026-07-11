@@ -38,7 +38,10 @@ In `.env`, paste PEM content as a single line, replacing newlines with `\n`. Bot
 - `REDIS_HOST`: Default `localhost`
 - `REDIS_PORT`: Default `6379`
 - `REDIS_PASSWORD`: Optional
-- `DISABLE_REDIS`: Set to `true` to skip BullMQ initialization (webhook CRUD remains available; async delivery queue is disabled). Useful for local development without Redis.
+- `DISABLE_REDIS`: Set to `true` to skip BullMQ initialization (webhook CRUD remains available; async delivery queue is disabled). Also switches `AppCacheModule` to in-memory cache. Default in `.env.example`: `true` (local dev without Redis).
+
+### RBAC Cache
+- `RBAC_CACHE_TTL`: Permission cache TTL in milliseconds. Default: `300000` (5 minutes). Used by `RbacService` and `AppCacheModule`.
 
 ### Security Guards
 - `PERMISSION_GUARD_STRICT`: Set to `true` to make `PermissionGuard` fail-closed (HTTP 403) when `@RequirePermissions` is absent. Default: `false` (fail-open with WARN log — allows routes protected by other means).

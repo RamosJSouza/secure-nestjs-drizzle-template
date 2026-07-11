@@ -6,21 +6,36 @@ O NestJS Security Pro é um backend NestJS pronto para produção, com estrutura
 
 ## Módulos
 
+### Infraestrutura (global ou transversal)
+
+| Módulo | Escopo | Finalidade |
+|--------|--------|------------|
+| ConfigModule | Global | Carregamento de ambiente + validação Joi (`src/config/validation.schema.ts`) |
+| DatabaseModule | `@Global` | Pool PostgreSQL + Drizzle (`DatabaseService.db`) |
+| LoggerModule | `@Global` | Logging estruturado Pino + middleware de correlation ID |
+| SecurityModule | `@Global` | Revogação JTI, credential stuffing, Motor de Risco, `SecurityEventService`; importa `AppCacheModule` |
+| AppCacheModule | `@Global` (via SecurityModule) | Cache Redis ou in-memory para permissões RBAC e blocklist JTI |
+| TenantModule | `@Global` | `TenantDatabaseService.withTenant()`, `TenantGuard`, `@RequireTenant()` |
+| RbacModule | `@Global` | CRUD RBAC + `RbacService` (verificação de permissões com cache) |
+| AuditModule | `@Global` | Log de auditoria append-only + `AuditInterceptor` global |
+| ThrottlerModule | App-wide | Rate limiting por endpoint (`ThrottlerGuard` registrado globalmente) |
+| ScheduleModule | App-wide | Tarefas agendadas (`@nestjs/schedule`) |
+| EventEmitterModule | App-wide | Eventos in-process (`@nestjs/event-emitter`, wildcard habilitado) |
+| BullModule | Condicional | Conexão root BullMQ — carregado apenas quando `DISABLE_REDIS !== 'true'` |
+
+### Módulos de domínio
+
 | Módulo | Finalidade |
 |--------|------------|
 | AuthModule | Login, refresh, logout, registro, alteração de senha |
-| UsersModule | Gestão de usuários (criação via auth/register) |
-| RbacModule | Features, Permissions, Roles, RolePermissions |
-| OrganizationsModule | CRUD de organizações |
-| TenantModule | Propagação de contexto de tenant, `TenantDatabaseService`, `TenantGuard` (`@Global`) |
-| AuditModule | Log de auditoria append-only (`@Global`) |
+| UsersModule | Gestão interna de usuários (lockout, soft-delete, revogação de sessões) |
+| OrganizationsModule | **Placeholder** — entidade existe no schema Drizzle; CRUD ainda não implementado |
 | HealthModule | Probes de liveness e readiness |
 | GracefulShutdownModule | Encerramento controlado |
-| LoggerModule | Pino, Correlation ID e redaction de PII (`@Global`) |
-| SecurityModule | Revogação de JTI, detecção de credential stuffing e Motor de Risco (`@Global`) |
-| ThrottlerModule | Rate limiting por endpoint (`@nestjs/throttler`) |
-| WebhookEndpointsModule | CRUD de webhook endpoints (sem dependência de Redis) |
-| WebhooksModule | Pipeline completo de webhooks: CRUD + entrega assíncrona via BullMQ (requer Redis) |
+| WebhookEndpointsModule | CRUD de webhook endpoints (sempre carregado quando Redis está desabilitado) |
+| WebhooksModule | Pipeline completo: CRUD + entrega assíncrona via BullMQ (requer Redis) |
+
+> **Ordem de importação no `AppModule`:** `SecurityModule` e `TenantModule` devem ser importados antes de `AuthModule` para que os providers globais (cache, revogação, contexto de tenant) estejam disponíveis durante o bootstrap de autenticação.
 
 ## Fluxo de Dados
 
@@ -52,6 +67,7 @@ src/
 │   ├── organizations/ # CRUD de organizações
 │   └── rbac/          # Entidades e serviços RBAC
 ├── security/          # Módulo de segurança @Global
+│   ├── cache/              # AppCacheModule (Redis ou CACHE_MANAGER in-memory)
 │   ├── events/             # SecurityEventService (facade tipada de auditoria)
 │   ├── token-revocation/   # Blocklist Redis de JTI
 │   ├── detection/          # Detecção de credential stuffing
@@ -86,6 +102,7 @@ src/
 - **Trust proxy habilitado** — Garante que os IPs reais dos clientes sejam usados no rate limiting e nos logs de auditoria quando implantado atrás de Nginx/ALB.
 - **Isolamento multi-tenant — dupla camada** — Todo método de serviço com escopo de tenant inclui uma cláusula `WHERE organization_id = orgId` explícita. `TenantDatabaseService.withTenant()` adicionalmente executa `SET LOCAL app.current_tenant` dentro de cada transação, permitindo que as políticas de RLS do PostgreSQL (se aplicadas via `src/database/rls/0001_enable_rls.sql`) reforcem o isolamento no nível do motor de banco como segunda camada.
 - **Pipeline de webhooks separado** — `WebhookEndpointsModule` (CRUD) está sempre disponível. `WebhooksModule` (fila de entrega BullMQ) é carregado condicionalmente via `DISABLE_REDIS=true` no `.env` — permite desenvolvimento local sem Redis enquanto mantém o pipeline completo em produção.
+- **Camada de cache unificada** — `AppCacheModule` (`src/security/cache/`) fornece um único `CACHE_MANAGER` para cache de permissões RBAC e blocklist JTI. Usa Redis quando disponível; fallback in-memory quando `DISABLE_REDIS=true`.
 - **Dotenv pré-carregado em `main.ts`** — `import 'dotenv/config'` como primeiro import garante que o `.env` seja lido antes que qualquer código em nível de módulo avalie `process.env`, incluindo o condicional `DISABLE_REDIS` no `AppModule`.
 
 ## Camada de Banco (Drizzle)
@@ -96,7 +113,61 @@ src/
 - Todas as queries de usuário filtram `deletedAt IS NULL` — usuários com soft-delete são completamente excluídos.
 - As políticas RLS são DDL opcional, não gerenciadas pelo Drizzle: aplique `src/database/rls/0001_enable_rls.sql` uma vez por ambiente.
 
+### Tabelas do schema (`src/database/schema/`)
+
+| Tabela | Finalidade |
+|--------|------------|
+| `users` | Contas, vínculo com role, organização, lockout, soft-delete |
+| `roles` | Papéis RBAC |
+| `features` | Módulos/features do RBAC |
+| `permissions` | Ações por feature |
+| `role_permissions` | Grants role ↔ permissão |
+| `sessions` | Refresh tokens, JTIs, fingerprint, rotação |
+| `organizations` | Orgs multi-tenant (usadas por users/sessions/webhooks) |
+| `audit_logs` | Trilha de auditoria append-only |
+| `webhook_endpoints` | URLs de webhook por org + segredos HMAC |
+| `webhook_deliveries` | Tentativas e status de entrega |
+
+### Migrations (`drizzle/`)
+
+| Arquivo | Resumo |
+|---------|--------|
+| `0000_organic_silhouette.sql` | Schema base |
+| `0001_good_jack_murdock.sql` | JTI do access token, device fingerprint, índices de sessão |
+| `0002_romantic_eternals.sql` | Webhooks + `organization_id` em users |
+| `0003_open_madripoor.sql` | `refresh_token_jti`, `organization_id` em sessions |
+
+Execute `npm run seed:rbac` após as migrations para criar features, permissões, roles (Super Admin, Manager, Viewer) e um usuário admin padrão. **Altere as credenciais do seed antes de qualquer deploy em produção.**
+
+## API HTTP (atual)
+
+| Prefixo | Auth | Descrição |
+|---------|------|-----------|
+| `GET /` | Não | Raiz / boas-vindas |
+| `POST /auth/login` | Não | Login (throttle 5/min) |
+| `POST /auth/refresh` | Não | Rotação de refresh token (10/min) |
+| `POST /auth/logout` | Bearer | Revoga sessão + JTI |
+| `POST /auth/register` | Bearer + `users:create` | Criação de usuário (admin) |
+| `POST /auth/change-password` | Bearer | Altera senha + revoga todas as sessões |
+| `GET/POST/PUT/DELETE /features` | Bearer + RBAC | CRUD de features |
+| `GET/POST/PUT/DELETE /roles` | Bearer + RBAC | CRUD de roles |
+| `POST /roles/:id/permissions` | Bearer + `rbac:assign_permissions` | Atribuir permissões |
+| `GET/POST/PUT/DELETE /permissions` | Bearer + RBAC | CRUD de permissões |
+| `GET/POST/PATCH/DELETE /webhook-endpoints` | Bearer + tenant | CRUD de webhooks (exige `@RequireTenant()`) |
+| `GET /health/liveness` | Não | Processo vivo |
+| `GET /health/readiness` | Não | Saúde DB + Redis |
+| `GET /api/docs` | Não | Swagger UI (apenas dev/test) |
+
+## Testes
+
+| Camada | Local | Notas |
+|--------|-------|-------|
+| Unitários | `src/**/*.spec.ts` | Jest, `rootDir: src` — **85 testes / 16 suites** |
+| E2E | `test/*.e2e-spec.ts` | Requer PostgreSQL; inclui cenários de isolamento multi-tenant |
+
+O CI exige **≥ 85% de cobertura** (statements, branches, functions, lines) via `.github/workflows/ci.yml`.
+
 ## Leitura Complementar
 
 - [docs/examples/rbac-multi-tenant.md](../examples/rbac-multi-tenant.md) — Exemplo completo RBAC + PostgreSQL RLS com multi-tenancy (CRUD de Projects)
-- [docs/en/deployment.md](../en/deployment.md) — Guia de deploy Railway, Render, Docker Compose e publicação npm
+- [docs/pt-br/deployment.md](../pt-br/deployment.md) — Guia de deploy Railway, Render, Docker Compose e publicação npm

@@ -1,5 +1,7 @@
 # Autenticação
 
+> **Documentação canônica:** [docs/pt-br/autenticacao.md](../docs/pt-br/autenticacao.md) · [docs/en/authentication.md](../docs/en/authentication.md)
+
 ## Visão geral
 
 O sistema usa JWT com algoritmo **RS256**. A chave privada (`PRIVATE_KEY`) assina os tokens; a chave pública (`PUBLIC_KEY`) verifica. Isso permite distribuir apenas a chave pública para serviços que validam tokens.
@@ -13,85 +15,51 @@ O sistema usa JWT com algoritmo **RS256**. A chave privada (`PRIVATE_KEY`) assin
 
 ## Payload JWT
 
-- `sub`: ID do usuário.
-- `email`: E-mail do usuário.
-- `roleId`: ID da Role atribuída ao usuário.
+Access token (15 min):
+- `sub`: ID do usuário
+- `jti`: JWT ID — UUID único por token, usado para revogação imediata
 
-> **Nota de segurança:** O campo `password` é sempre removido do `req.user`. O hash da senha nunca fica disponível para controllers ou interceptors.
+Refresh token (7 dias):
+- `sub`: ID do usuário apenas
 
-## Hash de Senhas
+> **Nota de segurança:** E-mail e `roleId` são **intencionalmente excluídos** de todos os payloads JWT — previne vazamento de PII via decodificação client-side e elimina claims de role desatualizadas. O `JwtStrategy` recarrega o usuário do banco a cada requisição; a role nunca é inferida do token. O campo `password` é sempre removido do `req.user`.
 
-As senhas são protegidas com **Argon2id**. Hashes bcrypt legados no banco são verificados normalmente e reprocessados com Argon2id de forma transparente no próximo login bem-sucedido — sem ação do usuário.
+## Hash de senhas
 
-## Fluxos
-
-### Login
-1. Cliente envia email e senha em `POST /auth/login`.
-2. Servidor valida credenciais. Todos os casos de falha retornam `"Invalid credentials"` (prevenção de enumeração de usuários).
-3. Verifica conta ativa (`isActive = true`) e não excluída (`deletedAt IS NULL`).
-4. Em sucesso: retorna `access_token` e `refresh_token`.
-5. Refresh token é armazenado em sessão (hash SHA-256) com IP e User-Agent.
-
-### Refresh
-1. Cliente envia `refresh_token` em `POST /auth/refresh`.
-2. Servidor valida token (RS256) e sessão.
-3. Se a sessão foi revogada (ex.: reutilização detectada), todas as sessões do usuário são revogadas e retorna erro.
-4. Em sucesso: nova sessão é criada, sessão antiga é revogada; retorna novo par de tokens (rotação).
-
-### Logout
-1. Cliente envia `refresh_token` em `POST /auth/logout` com Bearer token válido.
-2. Servidor revoga a sessão correspondente ao hash daquele token.
-3. O access token permanece válido até seu TTL de 15 minutos (sem estado por design).
-
-### Rotação e detecção de reutilização
-- Cada refresh invalida o token anterior (rotação).
-- Se um refresh token já revogado for usado (reutilização), o sistema:
-  - revoga todas as sessões do usuário;
-  - registra evento `auth.refresh_token_reuse_detected` no audit log.
-
-### Mudança de senha
-- `POST /auth/change-password` exige autenticação (Bearer).
-- Ao alterar a senha, **todas as sessões ativas (não revogadas)** do usuário são revogadas.
-- Sessões já revogadas preservam o timestamp original de `revoked_at` para manter a auditoria íntegra.
-- O usuário precisa fazer login novamente em cada dispositivo.
-
-## Bloqueio de conta (lockout)
-
-- Após **5 tentativas de login falhas**, a conta é bloqueada por **15 minutos**.
-- O evento `auth.account.locked` é registrado no audit log.
-- Usuários desativados ou bloqueados recebem `401 Unauthorized`.
-
-## Rate Limiting nos endpoints de Auth
-
-| Rota | Limite por IP |
-|------|---------------|
-| `POST /auth/login` | **5 req/min** (limiter `auth`) |
-| `POST /auth/refresh` | **10 req/min** (limiter `auth`) |
-| Demais rotas | 120 req/min (limiter `default`) |
-
-## Diagrama de sequência (login/register)
-
-```mermaid
-sequenceDiagram
-  participant C as Client
-  participant AC as AuthController
-  participant AS as AuthService
-  participant US as UsersService
-
-  C->>+AC: Login ou register
-  AC->>+AS: login() ou register()
-  AS->>+US: Busca ou cria usuário
-  US-->>-AS: Usuário
-  AS-->>-AC: Tokens ou confirmação
-  AC-->>-C: Resposta
-```
+As senhas são protegidas com **Argon2id** (64 MiB, 3 iterações, 4 threads). Hashes bcrypt legados são verificados e reprocessados com Argon2id de forma transparente no próximo login.
 
 ## Endpoints
 
-| Método | Rota                  | Auth          | Descrição                           |
-|--------|-----------------------|---------------|-------------------------------------|
-| POST   | /auth/login           | Não           | Login                               |
-| POST   | /auth/refresh         | Não           | Trocar refresh por novos tokens     |
-| POST   | /auth/logout          | Sim (Bearer)  | Revogar sessão atual                |
-| POST   | /auth/register        | Sim + perm    | Criar usuário (users:create)        |
-| POST   | /auth/change-password | Sim (Bearer)  | Alterar senha do usuário autenticado|
+| Método | Rota | Auth | Descrição |
+|--------|------|------|-----------|
+| POST | `/auth/login` | Não | Login (5 req/min por IP) |
+| POST | `/auth/refresh` | Não | Rotação de refresh token (10 req/min) |
+| POST | `/auth/logout` | Bearer | Revoga sessão + JTI imediatamente |
+| POST | `/auth/register` | Bearer + `users:create` | Cria usuário (admin) |
+| POST | `/auth/change-password` | Bearer | Exige `currentPassword`; revoga todas as sessões |
+
+## Fluxos resumidos
+
+### Login
+1. Verificação de IP na blocklist de credential stuffing (20 falhas/h → HTTP 429).
+2. Validação de credenciais com mensagem uniforme `"Invalid credentials"`.
+3. Motor de Risco pontua o login; score `critical` (≥80) bloqueia e revoga sessões.
+4. Limite de 10 sessões por usuário; JTI único embutido no access token.
+
+### Refresh
+Rotação atômica; reutilização de token revogado → revoga família de sessões + blocklist de JTIs.
+
+### Logout
+Revoga sessão no banco e adiciona JTI ao Redis blocklist imediatamente.
+
+### Alteração de senha
+Exige senha atual; revoga todas as sessões e JTIs ativos.
+
+## Proteções adicionais
+
+- Lockout por conta: 5 falhas → bloqueio de 15 minutos
+- Credential stuffing por IP: 20 falhas/hora → bloqueio de IP por 15 minutos
+- Soft-delete: usuários com `deletedAt` não autenticam
+- Rate limiting em duas camadas (global + por endpoint)
+
+Para diagramas de sequência, tabelas de rate limit e detalhes de revogação JTI, consulte a [documentação canônica](../docs/pt-br/autenticacao.md).

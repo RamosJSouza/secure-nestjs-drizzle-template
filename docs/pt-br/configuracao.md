@@ -38,7 +38,10 @@ No `.env`, cole o conteúdo PEM em uma linha, substituindo quebras por `\n`. Amb
 - `REDIS_HOST`: Padrão `localhost`
 - `REDIS_PORT`: Padrão `6379`
 - `REDIS_PASSWORD`: Opcional
-- `DISABLE_REDIS`: Defina como `true` para desabilitar a inicialização do BullMQ (o CRUD de webhooks permanece disponível; a fila de entrega assíncrona é desativada). Útil para desenvolvimento local sem Redis.
+- `DISABLE_REDIS`: Defina como `true` para desabilitar a inicialização do BullMQ (o CRUD de webhooks permanece disponível; a fila de entrega assíncrona é desativada). Também faz o `AppCacheModule` usar cache in-memory. Padrão no `.env.example`: `true` (dev local sem Redis).
+
+### Cache RBAC
+- `RBAC_CACHE_TTL`: TTL do cache de permissões em milissegundos. Padrão: `300000` (5 minutos). Usado por `RbacService` e `AppCacheModule`.
 
 ### Guards de Segurança
 - `PERMISSION_GUARD_STRICT`: Defina como `true` para que o `PermissionGuard` falhe fechado (HTTP 403) quando `@RequirePermissions` estiver ausente. Padrão: `false` (fail-open com log WARN — permite rotas protegidas por outros meios).

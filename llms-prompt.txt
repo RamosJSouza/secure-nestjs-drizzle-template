@@ -13,7 +13,8 @@ When generating code for this repository, you MUST strictly adhere to the follow
 - Use Drizzle ORM for ALL database interactions. Never use TypeORM patterns (no @Entity, no Repository injection, no ActiveRecord). Access the DB via `DatabaseService` (inject it, use `.db` property).
 - Keep controllers lean: only HTTP routing, DTO validation, and delegation to services.
 - `DatabaseModule` is `@Global()` — never import it in feature modules.
-- `SecurityModule` and `TenantModule` are `@Global()` — both are available everywhere; never import them in feature modules.
+- `SecurityModule`, `TenantModule`, and `RbacModule` are `@Global()` — available everywhere; never import them in feature modules.
+- `AppCacheModule` (via `SecurityModule`) provides `CACHE_MANAGER` — Redis when `DISABLE_REDIS=false`, in-memory otherwise. Used by RBAC permission cache and JTI blocklist.
 
 ## 2. Security & Validation (Zero Trust)
 
@@ -77,6 +78,8 @@ async findAll(orgId: string) {
 
 - New environment variable → add to Joi schema in `src/config/validation.schema.ts` (fail-fast on startup if missing in production) AND to `.env.example`.
 - The project uses Joi (not Zod) for env validation via `@nestjs/config`.
+- `RBAC_CACHE_TTL` controls permission cache TTL (default 300000 ms).
+- `DISABLE_REDIS=true` disables BullMQ and switches cache to in-memory.
 - `PERMISSION_GUARD_STRICT=true` → `PermissionGuard` fails closed (403) when `@RequirePermissions` absent; default is fail-open with WARN log.
 
 ## 7. Database Schema (Drizzle)

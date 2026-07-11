@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
-import { UnauthorizedException, ConflictException } from '@nestjs/common';
+import { UnauthorizedException, ConflictException, HttpStatus } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { UsersService } from 'src/users/users.service';
 import { AuditLogService } from '@/modules/audit/audit-log.service';
@@ -9,6 +9,7 @@ import { TokenRevocationService } from '@/security/token-revocation/token-revoca
 import { SuspiciousActivityService } from '@/security/detection/suspicious-activity.service';
 import { RiskEngineService } from '@/security/risk-engine/risk-engine.service';
 import { SecurityEventService } from '@/security/events/security-event.service';
+import { sessions } from '@/database/schema/sessions.schema';
 
 jest.mock('argon2', () => ({
   argon2id: 2,
@@ -76,6 +77,7 @@ describe('AuthService', () => {
     revokeToken: jest.fn().mockResolvedValue(undefined),
     revokeMany: jest.fn().mockResolvedValue(undefined),
     isRevoked: jest.fn().mockResolvedValue(false),
+    isFailClosedEnabled: jest.fn().mockReturnValue(false),
   };
 
   const mockSuspiciousActivityService = {
@@ -217,9 +219,10 @@ describe('AuthService', () => {
       id: VALID_SESSION_ID,
       userId: USER_ID,
       accessTokenJti: 'old-jti',
+      refreshTokenJti: 'old-refresh-jti',
       rotatedFromSessionId: null,
       expiresAt: futureDate,
-      revokedAt: new Date(), 
+      revokedAt: new Date(),
     };
 
     const activeUser = {
@@ -230,7 +233,12 @@ describe('AuthService', () => {
     };
 
     beforeEach(() => {
-      mockJwtService.verify.mockReturnValue({ sub: USER_ID, exp: Math.floor(futureDate.getTime() / 1000) });
+      mockJwtService.verify.mockReturnValue({
+        sub: USER_ID,
+        jti: 'old-refresh-jti',
+        typ: 'refresh',
+        exp: Math.floor(futureDate.getTime() / 1000),
+      });
     });
 
     it('should return new token pair on successful atomic claim', async () => {
@@ -242,7 +250,11 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('access_token');
       expect(result).toHaveProperty('refresh_token');
       expect(result.email).toBe('test@example.com');
-      expect(mockTokenRevocationService.revokeToken).toHaveBeenCalled();
+      expect(mockTokenRevocationService.revokeMany).toHaveBeenCalledWith(
+        expect.arrayContaining(['old-jti', 'old-refresh-jti']),
+        expect.any(Number),
+        expect.any(Boolean),
+      );
     });
 
     it('should throw and revoke all sessions on token reuse', async () => {
@@ -273,6 +285,34 @@ describe('AuthService', () => {
       await expect(
         service.refresh({ refresh_token: 'bad-signature-token' }),
       ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('rejects an access token (typ=access) presented as a refresh token', async () => {
+      mockJwtService.verify.mockReturnValueOnce({
+        sub: USER_ID,
+        jti: 'access-jti',
+        typ: 'access',
+        exp: Math.floor(futureDate.getTime() / 1000),
+      });
+      await expect(
+        service.refresh({ refresh_token: 'an-access-token' }),
+      ).rejects.toThrow('Invalid token type');
+    });
+
+    it('reverts the claimed session and throws 503 when JTI revocation fails (fail-closed)', async () => {
+      const failClosedSpy = jest
+        .spyOn(service['tokenRevocationService'], 'isFailClosedEnabled')
+        .mockReturnValueOnce(true);
+
+      mockUpdateReturning.mockResolvedValueOnce([claimedSession]); // claim succeeds
+      mockTokenRevocationService.revokeMany.mockRejectedValueOnce(new Error('redis down'));
+
+      await expect(
+        service.refresh({ refresh_token: 'valid-token' }),
+      ).rejects.toMatchObject({ status: HttpStatus.SERVICE_UNAVAILABLE });
+
+      expect(mockUpdate).toHaveBeenCalledWith(sessions);
+      failClosedSpy.mockRestore();
     });
     it('should throw UnauthorizedException when session is expired', async () => {
       const expiredSession = { ...claimedSession, expiresAt: pastDate };
@@ -356,6 +396,69 @@ describe('AuthService', () => {
       expect(mockAuditLogService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'auth.password.changed', entityId: USER_ID }),
       );
+    });
+  });
+
+  describe('token signing', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('signs access token with typ=access + jti and refresh with typ=refresh + jti', async () => {
+      const captured: Record<string, { payload: any; opts: any }> = {};
+      jest
+        .spyOn(mockJwtService, 'sign')
+        .mockImplementation((payload: any, opts: any) => {
+          const tag = opts.expiresIn === '15m' ? 'access' : 'refresh';
+          captured[tag] = { payload, opts };
+          return `mock-${tag}-token`;
+        });
+
+      mockUsersService.findOne.mockResolvedValueOnce({
+        id: 'u1',
+        email: 'v@x.com',
+        password: '$argon2id$mock',
+        isActive: true,
+        lockedUntil: null,
+      });
+
+      await service.login({ email: 'v@x.com', password: 'p' });
+
+      expect(captured.access.payload).toMatchObject({ sub: 'u1', typ: 'access' });
+      expect(captured.access.payload.jti).toEqual(expect.any(String));
+      expect(captured.access.opts).toMatchObject({
+        algorithm: 'RS256',
+        issuer: expect.any(String),
+        audience: expect.any(String),
+        expiresIn: '15m',
+      });
+
+      expect(captured.refresh.payload).toMatchObject({ sub: 'u1', typ: 'refresh' });
+      expect(captured.refresh.payload.jti).toEqual(expect.any(String));
+      expect(captured.refresh.opts.expiresIn).toBe('7d');
+    });
+  });
+
+  describe('session credential revocation', () => {
+    it('revokes both access and refresh JTIs when both are present', async () => {
+      const rows = [
+        { id: 's1', accessTokenJti: 'a1', refreshTokenJti: 'r1' },
+        { id: 's2', accessTokenJti: 'a2', refreshTokenJti: null },
+      ];
+      mockUsersService.findOneByIdForAuth.mockResolvedValueOnce({
+        id: 'u',
+        password: '$argon2id$mock',
+        isActive: true,
+      });
+      const argon2 = require('argon2');
+      argon2.verify.mockResolvedValue(true);
+      mockUpdateReturning.mockResolvedValueOnce(rows);
+
+      await service.changePassword('u', 'cur', 'New-Pass1');
+
+      expect(mockTokenRevocationService.revokeMany).toHaveBeenCalled();
+      const jtis = mockTokenRevocationService.revokeMany.mock.calls[0][0] as string[];
+      expect(jtis).toEqual(expect.arrayContaining(['a1', 'r1', 'a2']));
     });
   });
 });

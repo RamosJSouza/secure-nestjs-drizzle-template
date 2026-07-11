@@ -1,6 +1,7 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
+import { ConfigService } from '@nestjs/config';
 
 /**
  * Redis-backed JTI revocation list for access tokens.
@@ -33,7 +34,18 @@ export class TokenRevocationService {
   constructor(
     @Inject(CACHE_MANAGER)
     private readonly cacheManager: Cache,
+    private readonly configService: ConfigService,
   ) {}
+
+  /**
+   * Fail-closed only when Redis is actually in use. With DISABLE_REDIS=true
+   * (default dev), revocation is best-effort (fail-open) to avoid breaking
+   * auth flows during local development. In production (Redis available),
+   * security-critical paths (refresh rotation, soft-delete) fail closed.
+   */
+  isFailClosedEnabled(): boolean {
+    return this.configService.get<string>('DISABLE_REDIS') !== 'true';
+  }
 
   /**
    * Mark a JTI as revoked. The entry lives in Redis until the original
@@ -46,22 +58,25 @@ export class TokenRevocationService {
       await this.cacheManager.set(key, '1', ttlSeconds * 1000); // cache-manager uses ms
     } catch (err) {
       this.logger.error(`Failed to revoke JTI ${jti}: ${(err as Error).message}`);
-      // Re-throw: revocation failure is security-critical; callers decide whether to proceed
+      // revocation failure is security-critical; callers decide whether to proceed
       throw err;
     }
   }
 
   /**
-   * Revoke multiple JTIs in parallel (e.g., on password change).
-   * Errors are collected but do not stop other revocations.
+   * Revoke multiple JTIs in parallel. When failClosed is true, throws if any
+   * revocation fails (refresh rotation, soft-delete). Otherwise logs and continues.
    */
-  async revokeMany(jtis: string[], ttlSeconds: number): Promise<void> {
+  async revokeMany(jtis: string[], ttlSeconds: number, failClosed = false): Promise<void> {
     const results = await Promise.allSettled(
       jtis.map((jti) => this.revokeToken(jti, ttlSeconds)),
     );
     const failures = results.filter((r) => r.status === 'rejected');
     if (failures.length > 0) {
       this.logger.error(`${failures.length}/${jtis.length} JTI revocations failed`);
+      if (failClosed) {
+        throw new Error(`${failures.length}/${jtis.length} JTI revocations failed (failClosed)`);
+      }
     }
   }
 

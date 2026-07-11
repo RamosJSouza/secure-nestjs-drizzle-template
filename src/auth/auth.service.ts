@@ -23,12 +23,19 @@ import { TokenRevocationService } from '@/security/token-revocation/token-revoca
 import { SuspiciousActivityService } from '@/security/detection/suspicious-activity.service';
 import { RiskEngineService } from '@/security/risk-engine/risk-engine.service';
 import { SecurityEventService } from '@/security/events/security-event.service';
+import { TOKEN_TYPE, TOKEN_ISSUER, TOKEN_AUDIENCE } from './token-types';
 
 const ACCESS_TOKEN_EXPIRES = '15m';
 const REFRESH_TOKEN_EXPIRES = '7d';
 
 /** Maximum concurrent active sessions per user. Oldest is evicted when exceeded. */
 const MAX_SESSIONS_PER_USER = 10;
+
+const SESSION_CREDENTIAL_FIELDS = {
+  id: sessions.id,
+  accessTokenJti: sessions.accessTokenJti,
+  refreshTokenJti: sessions.refreshTokenJti,
+};
 
 const ARGON2_OPTIONS: argon2.Options = {
   type: argon2.argon2id,
@@ -126,6 +133,21 @@ export class AuthService {
     return ids;
   }
 
+  private async revokeSessionCredentials(
+    jtis: { accessTokenJti: string | null; refreshTokenJti: string | null }[],
+    failClosed = false,
+  ): Promise<void> {
+    const all = jtis
+      .flatMap((s) => [s.accessTokenJti, s.refreshTokenJti])
+      .filter((j): j is string => !!j);
+    if (all.length === 0) return;
+    await this.tokenRevocationService.revokeMany(
+      all,
+      TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS,
+      failClosed,
+    );
+  }
+
   private async revokeSessionFamilyAndLogReuse(
     reusedSession: Session,
     ip?: string,
@@ -138,19 +160,11 @@ export class AuthService {
       .update(sessions)
       .set({ revokedAt: new Date() })
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
-      .returning({ id: sessions.id, accessTokenJti: sessions.accessTokenJti });
+      .returning(SESSION_CREDENTIAL_FIELDS);
 
-    const jtis = revokedSessions
-      .map((s) => s.accessTokenJti)
-      .filter((j): j is string => !!j);
-
-    if (jtis.length > 0) {
-      await this.tokenRevocationService
-        .revokeMany(jtis, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
-        .catch((err: Error) =>
-          this.logger.error(`JTI revocation failed during reuse cleanup: ${err.message}`),
-        );
-    }
+    await this.revokeSessionCredentials(revokedSessions).catch((err: Error) =>
+      this.logger.error(`JTI revocation failed during reuse cleanup: ${err.message}`),
+    );
 
     this.logger.warn(
       `Refresh token reuse detected for user ${userId}. Revoked ${revokedSessions.length} sessions.`,
@@ -169,7 +183,7 @@ export class AuthService {
 
   private async enforceSessionLimit(userId: string, ip?: string): Promise<void> {
     const activeSessions = await this.db
-      .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
+      .select(SESSION_CREDENTIAL_FIELDS)
       .from(sessions)
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
       .orderBy(asc(sessions.createdAt));
@@ -178,18 +192,13 @@ export class AuthService {
 
     const toEvict = activeSessions.slice(0, activeSessions.length - MAX_SESSIONS_PER_USER + 1);
     const idsToEvict = toEvict.map((s) => s.id);
-    const jtisToRevoke = toEvict.map((s) => s.accessTokenJti).filter((j): j is string => !!j);
 
     await this.db
       .update(sessions)
       .set({ revokedAt: new Date() })
       .where(inArray(sessions.id, idsToEvict));
 
-    if (jtisToRevoke.length > 0) {
-      await this.tokenRevocationService
-        .revokeMany(jtisToRevoke, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
-        .catch(() => undefined);
-    }
+    await this.revokeSessionCredentials(toEvict).catch(() => undefined);
 
     this.logger.log(`Evicted ${toEvict.length} oldest sessions for user ${userId} (limit: ${MAX_SESSIONS_PER_USER})`);
 
@@ -263,20 +272,15 @@ export class AuthService {
 
     if (risk.level === 'critical') {
       const activeSessions = await this.db
-        .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
+        .select(SESSION_CREDENTIAL_FIELDS)
         .from(sessions)
         .where(and(eq(sessions.userId, user.id), isNull(sessions.revokedAt)));
 
-      const jtis = activeSessions.map((s) => s.accessTokenJti).filter((j): j is string => !!j);
       await this.db
         .update(sessions)
         .set({ revokedAt: new Date() })
         .where(and(eq(sessions.userId, user.id), isNull(sessions.revokedAt)));
-      if (jtis.length > 0) {
-        await this.tokenRevocationService
-          .revokeMany(jtis, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
-          .catch(() => undefined);
-      }
+      await this.revokeSessionCredentials(activeSessions).catch(() => undefined);
       await this.auditLogService.log({
         action: 'security.risk.login_blocked',
         entityType: 'User',
@@ -312,11 +316,19 @@ export class AuthService {
   ): Promise<{ email: string; access_token: string; refresh_token: string }> {
     const token = dto.refresh_token;
 
-    let payload: { sub: string; exp: number };
+    let payload: { sub: string; jti: string; typ: string; exp: number };
     try {
-      payload = this.jwtService.verify(token, { algorithms: ['RS256'] });
+      payload = this.jwtService.verify(token, {
+        algorithms: ['RS256'],
+        issuer: TOKEN_ISSUER,
+        audience: TOKEN_AUDIENCE,
+      });
     } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    if (payload.typ !== TOKEN_TYPE.REFRESH) {
+      throw new UnauthorizedException('Invalid token type');
     }
 
     const now = new Date();
@@ -344,24 +356,47 @@ export class AuthService {
 
     if (claimed.expiresAt < now) throw new UnauthorizedException('Refresh token expired');
 
-    if (claimed.accessTokenJti) {
-      this.tokenRevocationService
-        .revokeToken(claimed.accessTokenJti, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
-        .catch(() => undefined);
+    // Revoke old credentials before rotation; fail-closed reverts the claim if Redis fails.
+    const failClosed = this.tokenRevocationService.isFailClosedEnabled();
+    try {
+      await this.revokeSessionCredentials(
+        [{ accessTokenJti: claimed.accessTokenJti, refreshTokenJti: claimed.refreshTokenJti }],
+        failClosed,
+      );
+    } catch (err) {
+      this.logger.error(
+        `JTI revocation failed during refresh for user ${claimed.userId}: ${(err as Error).message}`,
+      );
+      if (failClosed) {
+        // try/catch (NOT .catch() on the query builder): the unit-test mock for
+        // `.where()` returns a plain thenable with no `.catch` method.
+        try {
+          await this.db
+            .update(sessions)
+            .set({ revokedAt: null })
+            .where(eq(sessions.id, claimed.id));
+        } catch (revertErr) {
+          this.logger.error(`Failed to revert session claim: ${(revertErr as Error).message}`);
+        }
+        throw new HttpException(
+          'Unable to complete token rotation. Please retry.',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
     }
 
     const user = await this.usersService.findById(claimed.userId);
     if (!user || !user.isActive) throw new UnauthorizedException('Invalid refresh token');
     if (user.lockedUntil && user.lockedUntil > now) throw new UnauthorizedException('Account is locked.');
 
-    return this.createTokensAndSession(user as User, ip, userAgent, claimed.id);
+    return this.createTokensAndSession(user, ip, userAgent, claimed.id);
   }
 
   async logout(userId: string, refreshToken: string): Promise<void> {
     const tokenHash = this.hashRefreshToken(refreshToken);
 
     const [session] = await this.db
-      .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
+      .select(SESSION_CREDENTIAL_FIELDS)
       .from(sessions)
       .where(
         and(
@@ -379,36 +414,36 @@ export class AuthService {
       .set({ revokedAt: new Date() })
       .where(eq(sessions.id, session.id));
 
-    if (session.accessTokenJti) {
-      await this.tokenRevocationService
-        .revokeToken(
-          session.accessTokenJti,
-          TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS,
-        )
-        .catch((err: Error) =>
-          this.logger.warn(`JTI revocation failed on logout: ${err.message}`),
-        );
-    }
+    await this.revokeSessionCredentials([session]).catch((err: Error) =>
+      this.logger.warn(`JTI revocation failed on logout: ${err.message}`),
+    );
   }
 
   private async createTokensAndSession(
-    user: User,
+    user: Pick<User, 'id' | 'email' | 'organizationId'>,
     ip?: string,
     userAgent?: string,
     rotatedFromSessionId?: string,
   ): Promise<{ email: string; access_token: string; refresh_token: string }> {
     await this.enforceSessionLimit(user.id, ip);
 
-    const jti = randomUUID();
+    const accessJti = randomUUID();
+    const refreshJti = randomUUID();
+
+    const commonSignOptions = {
+      algorithm: 'RS256' as const,
+      issuer: TOKEN_ISSUER,
+      audience: TOKEN_AUDIENCE,
+    };
 
     const accessToken = this.jwtService.sign(
-      { sub: user.id, jti },
-      { expiresIn: ACCESS_TOKEN_EXPIRES, algorithm: 'RS256' },
+      { sub: user.id, jti: accessJti, typ: TOKEN_TYPE.ACCESS },
+      { ...commonSignOptions, expiresIn: ACCESS_TOKEN_EXPIRES },
     );
 
     const refreshToken = this.jwtService.sign(
-      { sub: user.id },
-      { expiresIn: REFRESH_TOKEN_EXPIRES, algorithm: 'RS256' },
+      { sub: user.id, jti: refreshJti, typ: TOKEN_TYPE.REFRESH },
+      { ...commonSignOptions, expiresIn: REFRESH_TOKEN_EXPIRES },
     );
 
     const refreshTokenHash = this.hashRefreshToken(refreshToken);
@@ -418,7 +453,9 @@ export class AuthService {
     await this.db.insert(sessions).values({
       userId: user.id,
       refreshTokenHash,
-      accessTokenJti: jti,
+      accessTokenJti: accessJti,
+      refreshTokenJti: refreshJti,
+      organizationId: user.organizationId ?? null,
       deviceFingerprint: this.deviceFingerprint(userAgent, ip),
       ip: ip ?? null,
       userAgent: userAgent ?? null,
@@ -465,31 +502,18 @@ export class AuthService {
     const hashedPassword = await argon2.hash(newPassword, ARGON2_OPTIONS);
     await this.usersService.updatePassword(userId, hashedPassword);
 
-    const activeSessions = await this.db
-      .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
-      .from(sessions)
-      .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
-
-    const jtis = activeSessions
-      .map((s) => s.accessTokenJti)
-      .filter((j): j is string => !!j);
-
     const revoked = await this.db
       .update(sessions)
       .set({ revokedAt: new Date() })
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
-      .returning({ id: sessions.id });
+      .returning(SESSION_CREDENTIAL_FIELDS);
 
-    if (jtis.length > 0) {
-      await this.tokenRevocationService
-        .revokeMany(jtis, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
-        .catch((err: Error) =>
-          this.logger.error(`JTI revocation failed on password change: ${err.message}`),
-        );
-    }
+    await this.revokeSessionCredentials(revoked).catch((err: Error) =>
+      this.logger.error(`JTI revocation failed on password change: ${err.message}`),
+    );
 
     this.logger.log(
-      `Password changed for user ${userId}. Revoked ${revoked.length} sessions and ${jtis.length} access tokens.`,
+      `Password changed for user ${userId}. Revoked ${revoked.length} sessions.`,
     );
 
     await this.auditLogService.log({

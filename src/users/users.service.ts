@@ -2,6 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { DatabaseService } from '@/database/database.service';
 import { users, User } from '@/database/schema/users.schema';
+import { sessions } from '@/database/schema/sessions.schema';
+import { TokenRevocationService } from '@/security/token-revocation/token-revocation.service';
+import { RequestContext } from '@/logger/request-context';
 import { CreateUserDto } from './dto/create-user.dto';
 
 const LOCKOUT_THRESHOLD = 5;
@@ -23,7 +26,10 @@ const SAFE_FIELDS = {
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly dbService: DatabaseService) {}
+  constructor(
+    private readonly dbService: DatabaseService,
+    private readonly tokenRevocationService: TokenRevocationService,
+  ) {}
 
   async create(createUserDto: CreateUserDto): Promise<User> {
     const [user] = await this.dbService.db
@@ -39,10 +45,16 @@ export class UsersService {
   }
 
   async findAll(): Promise<Omit<User, 'password'>[]> {
+    const organizationId = RequestContext.getOrganizationId();
     return this.dbService.db
       .select(SAFE_FIELDS)
       .from(users)
-      .where(isNull(users.deletedAt));
+      .where(
+        and(
+          isNull(users.deletedAt),
+          organizationId ? eq(users.organizationId, organizationId) : undefined,
+        ),
+      );
   }
 
   /**
@@ -133,9 +145,41 @@ export class UsersService {
   }
 
   async remove(id: string): Promise<void> {
-    await this.dbService.db
-      .update(users)
-      .set({ deletedAt: new Date(), isActive: false })
-      .where(eq(users.id, id));
+    const failClosed = this.tokenRevocationService.isFailClosedEnabled();
+
+    // Soft-delete, session revocation, and Redis JTI revocation share one transaction
+    // so fail-closed Redis errors roll back the soft-delete (VULN-03).
+    await this.dbService.db.transaction(async (tx) => {
+      await tx
+        .update(users)
+        .set({ deletedAt: new Date(), isActive: false })
+        .where(eq(users.id, id));
+
+      const revoked = await tx
+        .update(sessions)
+        .set({ revokedAt: new Date() })
+        .where(and(eq(sessions.userId, id), isNull(sessions.revokedAt)))
+        .returning({
+          id: sessions.id,
+          accessTokenJti: sessions.accessTokenJti,
+          refreshTokenJti: sessions.refreshTokenJti,
+        });
+
+      const jtis = revoked
+        .flatMap((s) => [s.accessTokenJti, s.refreshTokenJti])
+        .filter((j): j is string => !!j);
+
+      if (jtis.length === 0) return;
+
+      try {
+        await this.tokenRevocationService.revokeMany(
+          jtis,
+          TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS,
+          failClosed,
+        );
+      } catch (err) {
+        if (failClosed) throw err;
+      }
+    });
   }
 }

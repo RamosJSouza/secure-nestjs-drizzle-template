@@ -3,10 +3,6 @@ import { Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'crypto';
 import { RequestContext } from './request-context';
 
-// Express 5 type augmentation requires the global Express namespace declaration.
-// The preferred `declare module 'express-serve-static-core'` form is blocked under
-// pnpm strict isolation (@types/express-serve-static-core is only a transitive dep,
-// not symlinked into node_modules/@types/), so TS cannot resolve that bare specifier.
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {

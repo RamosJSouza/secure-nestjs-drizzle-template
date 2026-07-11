@@ -68,7 +68,6 @@ module.exports = [
     },
     rules: customRules,
   },
-  // Seed scripts are CLI tools (npm run seed:rbac); console output is intentional.
   {
     files: ['src/migrations/seeds/**/*.ts'],
     rules: {

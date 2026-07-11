@@ -68,5 +68,11 @@ module.exports = [
     },
     rules: customRules,
   },
+  {
+    files: ['src/migrations/seeds/**/*.ts'],
+    rules: {
+      'no-console': 'off',
+    },
+  },
   prettierRecommended,
 ];

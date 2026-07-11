@@ -54,14 +54,22 @@ export class TokenRevocationService {
   /**
    * Revoke multiple JTIs in parallel (e.g., on password change).
    * Errors are collected but do not stop other revocations.
+   *
+   * @param failClosed When true, throw if any revocation fails (security-critical
+   *   paths like refresh rotation and soft-delete). When false (default), log and
+   *   continue — appropriate for best-effort cleanup paths where failing would
+   *   hurt availability more than the stale JTI window (bounded by the access TTL).
    */
-  async revokeMany(jtis: string[], ttlSeconds: number): Promise<void> {
+  async revokeMany(jtis: string[], ttlSeconds: number, failClosed = false): Promise<void> {
     const results = await Promise.allSettled(
       jtis.map((jti) => this.revokeToken(jti, ttlSeconds)),
     );
     const failures = results.filter((r) => r.status === 'rejected');
     if (failures.length > 0) {
       this.logger.error(`${failures.length}/${jtis.length} JTI revocations failed`);
+      if (failClosed) {
+        throw new Error(`${failures.length}/${jtis.length} JTI revocations failed (failClosed)`);
+      }
     }
   }
 

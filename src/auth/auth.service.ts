@@ -127,6 +127,21 @@ export class AuthService {
     return ids;
   }
 
+  private async revokeSessionCredentials(
+    jtis: { accessTokenJti: string | null; refreshTokenJti: string | null }[],
+    failClosed = false,
+  ): Promise<void> {
+    const all = jtis
+      .flatMap((s) => [s.accessTokenJti, s.refreshTokenJti])
+      .filter((j): j is string => !!j);
+    if (all.length === 0) return;
+    await this.tokenRevocationService.revokeMany(
+      all,
+      TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS,
+      failClosed,
+    );
+  }
+
   private async revokeSessionFamilyAndLogReuse(
     reusedSession: Session,
     ip?: string,
@@ -139,19 +154,15 @@ export class AuthService {
       .update(sessions)
       .set({ revokedAt: new Date() })
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
-      .returning({ id: sessions.id, accessTokenJti: sessions.accessTokenJti });
+      .returning({
+        id: sessions.id,
+        accessTokenJti: sessions.accessTokenJti,
+        refreshTokenJti: sessions.refreshTokenJti,
+      });
 
-    const jtis = revokedSessions
-      .map((s) => s.accessTokenJti)
-      .filter((j): j is string => !!j);
-
-    if (jtis.length > 0) {
-      await this.tokenRevocationService
-        .revokeMany(jtis, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
-        .catch((err: Error) =>
-          this.logger.error(`JTI revocation failed during reuse cleanup: ${err.message}`),
-        );
-    }
+    await this.revokeSessionCredentials(revokedSessions).catch((err: Error) =>
+      this.logger.error(`JTI revocation failed during reuse cleanup: ${err.message}`),
+    );
 
     this.logger.warn(
       `Refresh token reuse detected for user ${userId}. Revoked ${revokedSessions.length} sessions.`,
@@ -170,7 +181,11 @@ export class AuthService {
 
   private async enforceSessionLimit(userId: string, ip?: string): Promise<void> {
     const activeSessions = await this.db
-      .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
+      .select({
+        id: sessions.id,
+        accessTokenJti: sessions.accessTokenJti,
+        refreshTokenJti: sessions.refreshTokenJti,
+      })
       .from(sessions)
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
       .orderBy(asc(sessions.createdAt));
@@ -179,18 +194,13 @@ export class AuthService {
 
     const toEvict = activeSessions.slice(0, activeSessions.length - MAX_SESSIONS_PER_USER + 1);
     const idsToEvict = toEvict.map((s) => s.id);
-    const jtisToRevoke = toEvict.map((s) => s.accessTokenJti).filter((j): j is string => !!j);
 
     await this.db
       .update(sessions)
       .set({ revokedAt: new Date() })
       .where(inArray(sessions.id, idsToEvict));
 
-    if (jtisToRevoke.length > 0) {
-      await this.tokenRevocationService
-        .revokeMany(jtisToRevoke, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
-        .catch(() => undefined);
-    }
+    await this.revokeSessionCredentials(toEvict).catch(() => undefined);
 
     this.logger.log(`Evicted ${toEvict.length} oldest sessions for user ${userId} (limit: ${MAX_SESSIONS_PER_USER})`);
 
@@ -264,20 +274,19 @@ export class AuthService {
 
     if (risk.level === 'critical') {
       const activeSessions = await this.db
-        .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
+        .select({
+          id: sessions.id,
+          accessTokenJti: sessions.accessTokenJti,
+          refreshTokenJti: sessions.refreshTokenJti,
+        })
         .from(sessions)
         .where(and(eq(sessions.userId, user.id), isNull(sessions.revokedAt)));
 
-      const jtis = activeSessions.map((s) => s.accessTokenJti).filter((j): j is string => !!j);
       await this.db
         .update(sessions)
         .set({ revokedAt: new Date() })
         .where(and(eq(sessions.userId, user.id), isNull(sessions.revokedAt)));
-      if (jtis.length > 0) {
-        await this.tokenRevocationService
-          .revokeMany(jtis, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
-          .catch(() => undefined);
-      }
+      await this.revokeSessionCredentials(activeSessions).catch(() => undefined);
       await this.auditLogService.log({
         action: 'security.risk.login_blocked',
         entityType: 'User',
@@ -370,7 +379,11 @@ export class AuthService {
     const tokenHash = this.hashRefreshToken(refreshToken);
 
     const [session] = await this.db
-      .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
+      .select({
+        id: sessions.id,
+        accessTokenJti: sessions.accessTokenJti,
+        refreshTokenJti: sessions.refreshTokenJti,
+      })
       .from(sessions)
       .where(
         and(
@@ -388,16 +401,9 @@ export class AuthService {
       .set({ revokedAt: new Date() })
       .where(eq(sessions.id, session.id));
 
-    if (session.accessTokenJti) {
-      await this.tokenRevocationService
-        .revokeToken(
-          session.accessTokenJti,
-          TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS,
-        )
-        .catch((err: Error) =>
-          this.logger.warn(`JTI revocation failed on logout: ${err.message}`),
-        );
-    }
+    await this.revokeSessionCredentials([session]).catch((err: Error) =>
+      this.logger.warn(`JTI revocation failed on logout: ${err.message}`),
+    );
   }
 
   private async createTokensAndSession(
@@ -483,31 +489,22 @@ export class AuthService {
     const hashedPassword = await argon2.hash(newPassword, ARGON2_OPTIONS);
     await this.usersService.updatePassword(userId, hashedPassword);
 
-    const activeSessions = await this.db
-      .select({ id: sessions.id, accessTokenJti: sessions.accessTokenJti })
-      .from(sessions)
-      .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
-
-    const jtis = activeSessions
-      .map((s) => s.accessTokenJti)
-      .filter((j): j is string => !!j);
-
     const revoked = await this.db
       .update(sessions)
       .set({ revokedAt: new Date() })
       .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
-      .returning({ id: sessions.id });
+      .returning({
+        id: sessions.id,
+        accessTokenJti: sessions.accessTokenJti,
+        refreshTokenJti: sessions.refreshTokenJti,
+      });
 
-    if (jtis.length > 0) {
-      await this.tokenRevocationService
-        .revokeMany(jtis, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
-        .catch((err: Error) =>
-          this.logger.error(`JTI revocation failed on password change: ${err.message}`),
-        );
-    }
+    await this.revokeSessionCredentials(revoked).catch((err: Error) =>
+      this.logger.error(`JTI revocation failed on password change: ${err.message}`),
+    );
 
     this.logger.log(
-      `Password changed for user ${userId}. Revoked ${revoked.length} sessions and ${jtis.length} access tokens.`,
+      `Password changed for user ${userId}. Revoked ${revoked.length} sessions.`,
     );
 
     await this.auditLogService.log({

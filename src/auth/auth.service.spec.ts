@@ -416,4 +416,28 @@ describe('AuthService', () => {
       expect(captured.refresh.opts.expiresIn).toBe('7d');
     });
   });
+
+  describe('revokeSessionCredentials helper (VULN-01)', () => {
+    it('revokes both access and refresh JTIs when both are present', async () => {
+      const rows = [
+        { id: 's1', accessTokenJti: 'a1', refreshTokenJti: 'r1' },
+        { id: 's2', accessTokenJti: 'a2', refreshTokenJti: null },
+      ];
+      // helper is private; exercise it indirectly via changePassword which calls it.
+      mockUsersService.findOneByIdForAuth.mockResolvedValueOnce({
+        id: 'u',
+        password: '$argon2id$mock',
+        isActive: true,
+      });
+      const argon2 = require('argon2');
+      argon2.verify.mockResolvedValue(true);
+      mockUpdateReturning.mockResolvedValueOnce(rows); // sessions revoked in changePassword
+
+      await service.changePassword('u', 'cur', 'New-Pass1');
+
+      expect(mockTokenRevocationService.revokeMany).toHaveBeenCalled();
+      const jtis = mockTokenRevocationService.revokeMany.mock.calls[0][0] as string[];
+      expect(jtis).toEqual(expect.arrayContaining(['a1', 'r1', 'a2']));
+    });
+  });
 });

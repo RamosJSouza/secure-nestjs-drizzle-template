@@ -362,12 +362,10 @@ export class AuthService {
 
     if (claimed.expiresAt < now) throw new UnauthorizedException('Refresh token expired');
 
-    // Revoke the OLD session's credentials BEFORE issuing new tokens. With
-    // refresh tokens now carrying a jti (VULN-01), both the access and refresh
-    // JTIs must be revoked atomically so a stolen refresh token can't be
-    // replayed as an access token after rotation. Fail-closed (gated on Redis
-    // availability) so rotation is not reported successful until revocation is
-    // confirmed; on failure, revert the atomic claim so the client may retry.
+    // Revoke the OLD session's access+refresh JTIs before issuing new tokens
+    // (VULN-01): a stolen refresh token must not remain replayable as an access
+    // token after rotation. Fail-closed so rotation isn't reported successful
+    // until revocation is confirmed; on failure, revert the atomic claim.
     const failClosed = this.tokenRevocationService.isFailClosedEnabled();
     try {
       await this.revokeSessionCredentials(
@@ -379,8 +377,7 @@ export class AuthService {
         `JTI revocation failed during refresh for user ${claimed.userId}: ${(err as Error).message}`,
       );
       if (failClosed) {
-        // Revert the atomic claim so the client may retry with the same refresh token.
-        // Use try/catch (NOT .catch() on the query builder): the unit-test mock for
+        // try/catch (NOT .catch() on the query builder): the unit-test mock for
         // `.where()` returns a plain thenable with no `.catch` method.
         try {
           await this.db
@@ -395,14 +392,14 @@ export class AuthService {
           HttpStatus.SERVICE_UNAVAILABLE,
         );
       }
-      // fail-open path (DISABLE_REDIS=true): log and continue — bounded by the 15m access TTL.
+      // fail-open (DISABLE_REDIS=true): fall through — bounded by the access TTL.
     }
 
     const user = await this.usersService.findById(claimed.userId);
     if (!user || !user.isActive) throw new UnauthorizedException('Invalid refresh token');
     if (user.lockedUntil && user.lockedUntil > now) throw new UnauthorizedException('Account is locked.');
 
-    return this.createTokensAndSession(user as User, ip, userAgent, claimed.id);
+    return this.createTokensAndSession(user, ip, userAgent, claimed.id);
   }
 
   async logout(userId: string, refreshToken: string): Promise<void> {
@@ -437,7 +434,7 @@ export class AuthService {
   }
 
   private async createTokensAndSession(
-    user: User,
+    user: Pick<User, 'id' | 'email' | 'organizationId'>,
     ip?: string,
     userAgent?: string,
     rotatedFromSessionId?: string,

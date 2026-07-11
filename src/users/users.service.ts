@@ -182,11 +182,11 @@ export class UsersService {
           );
         } catch (err) {
           if (!failClosed) {
-            // fail-open: log and let the tx commit. Soft-delete still revokes
-            // sessions in DB; only the Redis JTI list is stale (bounded by TTL).
+            // fail-open: soft-delete still revokes sessions in DB; only the
+            // Redis JTI list is stale (bounded by the access-token TTL).
             return;
           }
-          throw err; // fail-closed: propagates -> tx rolls back
+          throw err;
         }
       }
     });

@@ -58,7 +58,7 @@ export class TokenRevocationService {
       await this.cacheManager.set(key, '1', ttlSeconds * 1000); // cache-manager uses ms
     } catch (err) {
       this.logger.error(`Failed to revoke JTI ${jti}: ${(err as Error).message}`);
-      // Re-throw: revocation failure is security-critical; callers decide whether to proceed
+      // revocation failure is security-critical; callers decide whether to proceed
       throw err;
     }
   }

@@ -4,10 +4,11 @@ import {
   ConflictException,
   Logger,
 } from '@nestjs/common';
-import { eq, asc, count } from 'drizzle-orm';
+import { eq, asc, count, inArray } from 'drizzle-orm';
 import { DatabaseService } from '@/database/database.service';
 import { roles, Role } from '@/database/schema/roles.schema';
 import { rolePermissions } from '@/database/schema/role-permissions.schema';
+import { permissions } from '@/database/schema/permissions.schema';
 import { users } from '@/database/schema/users.schema';
 import { CreateRoleDto, UpdateRoleDto, AssignPermissionsDto } from '../dto/role.dto';
 import { RbacService } from './rbac.service';
@@ -25,6 +26,18 @@ export class RoleService {
 
   private get db() {
     return this.dbService.db;
+  }
+
+  private async assertRoleExists(roleId: string): Promise<void> {
+    const [row] = await this.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.id, roleId))
+      .limit(1);
+
+    if (!row) {
+      throw new NotFoundException(`Role with ID "${roleId}" not found`);
+    }
   }
 
   async create(dto: CreateRoleDto): Promise<Role> {
@@ -47,15 +60,6 @@ export class RoleService {
 
   async findAll(): Promise<Role[]> {
     return this.db.query.roles.findMany({
-      with: {
-        rolePermissions: {
-          with: {
-            permission: {
-              with: { feature: true },
-            },
-          },
-        },
-      },
       orderBy: asc(roles.name),
     });
   }
@@ -82,7 +86,7 @@ export class RoleService {
   }
 
   async update(id: string, dto: UpdateRoleDto): Promise<Role> {
-    await this.findOne(id);
+    await this.assertRoleExists(id);
 
     if (dto.name) {
       const [existing] = await this.db
@@ -111,7 +115,7 @@ export class RoleService {
   }
 
   async remove(id: string): Promise<void> {
-    await this.findOne(id);
+    await this.assertRoleExists(id);
 
     const [{ value: userCount }] = await this.db
       .select({ value: count() })
@@ -133,35 +137,50 @@ export class RoleService {
     dto: AssignPermissionsDto,
     currentUserId?: string,
   ): Promise<void> {
-    await this.findOne(roleId);
+    await this.assertRoleExists(roleId);
 
-    // Capture current state for audit diff (V-6: RBAC change audit trail)
-    const before = await this.db
-      .select({ permissionId: rolePermissions.permissionId })
-      .from(rolePermissions)
-      .where(eq(rolePermissions.roleId, roleId));
-    const beforeIds = before.map((r) => r.permissionId);
+    const uniquePermissionIds = [...new Set(dto.permissionIds)];
 
-    const uniquePermissions = [...new Set(dto.permissionIds)];
+    const beforeIds = await this.db.transaction(async (tx) => {
+      const previousIds = (
+        await tx
+          .select({ permissionId: rolePermissions.permissionId })
+          .from(rolePermissions)
+          .where(eq(rolePermissions.roleId, roleId))
+      ).map(({ permissionId }) => permissionId);
 
-    await this.db.transaction(async (tx) => {
+      if (uniquePermissionIds.length > 0) {
+        const valid = await tx
+          .select({ id: permissions.id })
+          .from(permissions)
+          .where(inArray(permissions.id, uniquePermissionIds));
+
+        if (valid.length !== uniquePermissionIds.length) {
+          throw new NotFoundException('One or more permission IDs were not found');
+        }
+      }
+
       await tx.delete(rolePermissions).where(eq(rolePermissions.roleId, roleId));
 
-      if (uniquePermissions.length > 0) {
+      if (uniquePermissionIds.length > 0) {
         await tx.insert(rolePermissions).values(
-          uniquePermissions.map((permissionId) => ({
+          uniquePermissionIds.map((permissionId) => ({
             roleId,
             permissionId,
             granted: true,
           })),
         );
       }
+
+      return previousIds;
     });
 
-    await this.rbacService.invalidateRoleCache(roleId);
+    const beforeSet = new Set(beforeIds);
+    const nextSet = new Set(uniquePermissionIds);
+    const added = uniquePermissionIds.filter((id) => !beforeSet.has(id));
+    const removed = beforeIds.filter((id) => !nextSet.has(id));
 
-    const added = uniquePermissions.filter((id) => !beforeIds.includes(id));
-    const removed = beforeIds.filter((id) => !uniquePermissions.includes(id));
+    await this.rbacService.invalidateRoleCache(roleId);
 
     this.logger.log(
       `Permissions updated for role ${roleId} by ${currentUserId || 'system'}: +${added.length} added, -${removed.length} removed`,
@@ -172,7 +191,7 @@ export class RoleService {
       entityType: 'Role',
       entityId: roleId,
       actorUserId: currentUserId,
-      metadata: { added, removed, total: uniquePermissions.length },
+      metadata: { added, removed, total: uniquePermissionIds.length },
     });
   }
 }

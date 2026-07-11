@@ -8,14 +8,15 @@ describe('RbacService', () => {
   let service: RbacService;
   let mockCacheManager: any;
 
-  const mockFindMany = jest.fn();
+  const mockWhere = jest.fn();
+  const mockInnerJoin2 = jest.fn().mockReturnValue({ where: mockWhere });
+  const mockInnerJoin1 = jest.fn().mockReturnValue({ innerJoin: mockInnerJoin2 });
+  const mockFrom = jest.fn().mockReturnValue({ innerJoin: mockInnerJoin1 });
+  const mockSelect = jest.fn().mockReturnValue({ from: mockFrom });
+
   const mockDatabaseService = {
     db: {
-      query: {
-        rolePermissions: {
-          findMany: mockFindMany,
-        },
-      },
+      select: mockSelect,
     },
   };
 
@@ -58,9 +59,9 @@ describe('RbacService', () => {
       const requiredPermissions = ['test:view', 'test:edit'];
 
       mockCacheManager.get.mockResolvedValue(null);
-      mockFindMany.mockResolvedValue([
-        { permission: { action: 'view', feature: { key: 'test' } } },
-        { permission: { action: 'edit', feature: { key: 'test' } } },
+      mockWhere.mockResolvedValue([
+        { permissionKey: 'test:view' },
+        { permissionKey: 'test:edit' },
       ]);
 
       const result = await service.checkPermissions(roleId, requiredPermissions);
@@ -80,14 +81,12 @@ describe('RbacService', () => {
 
       const result = await service.checkPermissions('role-123', ['test:view']);
       expect(result).toBe(true);
-      expect(mockFindMany).not.toHaveBeenCalled();
+      expect(mockSelect).not.toHaveBeenCalled();
     });
 
     it('should handle cache error gracefully (fallback to DB)', async () => {
       mockCacheManager.get.mockRejectedValue(new Error('Redis down'));
-      mockFindMany.mockResolvedValue([
-        { permission: { action: 'view', feature: { key: 'test' } } },
-      ]);
+      mockWhere.mockResolvedValue([{ permissionKey: 'test:view' }]);
 
       const result = await service.getPermissionsForRole('role-123');
       expect(result).toEqual(['test:view']);
@@ -98,6 +97,24 @@ describe('RbacService', () => {
     it('should delete keys from cache', async () => {
       await service.invalidateRoleCache('role-123');
       expect(mockCacheManager.del).toHaveBeenCalledWith('rbac:role:role-123:permissions');
+    });
+  });
+
+  describe('invalidateRolesForPermission', () => {
+    it('invalidates cache for each role linked to the permission', async () => {
+      const mockSelect = jest.fn().mockReturnValue({
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockResolvedValue([{ roleId: 'role-a' }, { roleId: 'role-b' }]),
+        }),
+      });
+      (mockDatabaseService as any).db.select = mockSelect;
+
+      const delSpy = jest.spyOn(mockCacheManager, 'del');
+
+      await service.invalidateRolesForPermission('perm-1');
+
+      expect(delSpy).toHaveBeenCalledWith('rbac:role:role-a:permissions');
+      expect(delSpy).toHaveBeenCalledWith('rbac:role:role-b:permissions');
     });
   });
 });

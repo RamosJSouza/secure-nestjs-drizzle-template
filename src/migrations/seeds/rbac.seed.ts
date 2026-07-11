@@ -1,6 +1,6 @@
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as bcrypt from 'bcryptjs';
-import { eq, and } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import * as schema from '@/database/schema';
 import { features } from '@/database/schema/features.schema';
 import { permissions } from '@/database/schema/permissions.schema';
@@ -18,19 +18,14 @@ export async function seedRbac(db: NodePgDatabase<typeof schema>) {
       { key: 'financial', name: 'Dashboard Financeiro', description: 'Acesso a dados financeiros' },
     ];
 
-    const featureMap: Record<string, schema.Feature> = {};
+    await tx
+      .insert(features)
+      .values(featuresData.map((f) => ({ ...f, isActive: true })))
+      .onConflictDoNothing({ target: features.key });
 
-    for (const f of featuresData) {
-      const [existing] = await tx.select().from(features).where(eq(features.key, f.key)).limit(1);
-      if (!existing) {
-        const [created] = await tx.insert(features).values({ ...f, isActive: true }).returning();
-        featureMap[f.key] = created;
-        console.log(`✅ Feature created: ${f.key}`);
-      } else {
-        featureMap[f.key] = existing;
-        console.log(`ℹ️ Feature already exists: ${f.key}`);
-      }
-    }
+    const dbFeatures = await tx.select().from(features);
+    const featureMap = Object.fromEntries(dbFeatures.map((f) => [f.key, f]));
+    console.log(`✅ Features upserted: ${featuresData.length}`);
 
     const permissionsData = [
       { featureKey: 'rbac', action: 'view', name: 'Visualizar' },
@@ -44,32 +39,29 @@ export async function seedRbac(db: NodePgDatabase<typeof schema>) {
       { featureKey: 'users', action: 'delete', name: 'Deletar' },
     ];
 
-    const allPermissions: schema.Permission[] = [];
-
-    for (const p of permissionsData) {
-      const feature = featureMap[p.featureKey];
-      const [existing] = await tx
-        .select()
-        .from(permissions)
-        .where(and(eq(permissions.featureId, feature.id), eq(permissions.action, p.action)))
-        .limit(1);
-
-      if (!existing) {
-        const [created] = await tx
-          .insert(permissions)
-          .values({
+    await tx
+      .insert(permissions)
+      .values(
+        permissionsData.map((p) => {
+          const feature = featureMap[p.featureKey];
+          return {
             featureId: feature.id,
             action: p.action,
             name: p.name,
             description: `Permissão para ${p.action} em ${feature.name}`,
-          })
-          .returning();
-        allPermissions.push(created);
-        console.log(`✅ Permission created: ${p.featureKey}:${p.action}`);
-      } else {
-        allPermissions.push(existing);
-      }
-    }
+          };
+        }),
+      )
+      .onConflictDoNothing({ target: [permissions.featureId, permissions.action] });
+
+    const dbPermissions = await tx.select().from(permissions);
+    const permissionMap = Object.fromEntries(
+      dbPermissions.map((p) => [`${p.featureId}:${p.action}`, p]),
+    );
+    const allPermissions = permissionsData.map(
+      (p) => permissionMap[`${featureMap[p.featureKey].id}:${p.action}`],
+    );
+    console.log(`✅ Permissions upserted: ${permissionsData.length}`);
 
     const rolesData = [
       { name: 'Super Admin', description: 'Acesso total ao sistema' },
@@ -77,21 +69,14 @@ export async function seedRbac(db: NodePgDatabase<typeof schema>) {
       { name: 'Viewer', description: 'Apenas visualização' },
     ];
 
-    const roleMap: Record<string, schema.Role> = {};
+    await tx
+      .insert(roles)
+      .values(rolesData.map((r) => ({ ...r, isActive: true })))
+      .onConflictDoNothing({ target: roles.name });
 
-    for (const r of rolesData) {
-      const [existing] = await tx.select().from(roles).where(eq(roles.name, r.name)).limit(1);
-      if (!existing) {
-        const [created] = await tx
-          .insert(roles)
-          .values({ ...r, isActive: true })
-          .returning();
-        roleMap[r.name] = created;
-        console.log(`✅ Role created: ${r.name}`);
-      } else {
-        roleMap[r.name] = existing;
-      }
-    }
+    const dbRoles = await tx.select().from(roles);
+    const roleMap = Object.fromEntries(dbRoles.map((r) => [r.name, r]));
+    console.log(`✅ Roles upserted: ${rolesData.length}`);
 
     const adminRole = roleMap['Super Admin'];
 

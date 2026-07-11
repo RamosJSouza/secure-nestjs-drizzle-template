@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { RoleService } from './role.service';
 import { RbacService } from './rbac.service';
 import { DatabaseService } from '@/database/database.service';
@@ -47,7 +47,6 @@ describe('RoleService', () => {
     mockRbacService = { invalidateRoleCache: jest.fn() };
     auditLog = { log: jest.fn().mockResolvedValue(undefined) };
 
-    // Default chaining — where() is thenable (resolves to []) so direct `await` works
     mockDb.select.mockReturnValue({ from: mockDb.from });
     mockDb.from.mockReturnValue({ where: mockDb.where });
     mockDb.where.mockReturnValue({
@@ -91,6 +90,25 @@ describe('RoleService', () => {
     expect(result).toEqual({ id: '1', name: 'Admin' });
   });
 
+  it('findAll returns roles without nested rolePermissions', async () => {
+    const rolesList = [
+      { id: 'r1', name: 'Admin', isActive: true, description: null, createdAt: new Date(), updatedAt: new Date() },
+    ];
+    mockDb.query.roles.findMany.mockResolvedValue(rolesList);
+
+    const result = await service.findAll();
+
+    expect(result).toEqual(rolesList);
+    expect(mockDb.query.roles.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: expect.anything(),
+      }),
+    );
+    expect(mockDb.query.roles.findMany).toHaveBeenCalledWith(
+      expect.not.objectContaining({ with: expect.anything() }),
+    );
+  });
+
   it('should prevent creating duplicate roles', async () => {
     mockTx.select.mockReturnValue({ from: mockTx.from });
     mockTx.from.mockReturnValue({ where: mockTx.where });
@@ -103,17 +121,33 @@ describe('RoleService', () => {
   });
 
   it('should not delete role if users are assigned', async () => {
-    mockDb.query.roles.findFirst.mockResolvedValue({ id: 'role-1', name: 'Admin' });
+    mockDb.limit.mockResolvedValue([{ id: 'role-1' }]);
     mockDb.select.mockReturnValue({ from: mockDb.from });
     mockDb.from.mockReturnValue({ where: mockDb.where });
-    mockDb.where.mockResolvedValue([{ value: 5 }]);
+    mockDb.where.mockReturnValueOnce({ limit: mockDb.limit });
+    mockDb.where.mockReturnValueOnce({
+      then: (resolve: any) => Promise.resolve([{ value: 5 }]).then(resolve),
+    });
 
     await expect(service.remove('role-1')).rejects.toThrow(ConflictException);
   });
 
   it('should assign permissions transactionally', async () => {
-    mockDb.query.roles.findFirst.mockResolvedValue({ id: 'role-1', name: 'Admin' });
+    mockDb.limit.mockResolvedValue([{ id: 'role-1' }]);
+    mockDb.select.mockReturnValue({ from: mockDb.from });
+    mockDb.from.mockReturnValue({ where: mockDb.where });
+    mockDb.where.mockReturnValueOnce({ limit: mockDb.limit });
 
+    mockTx.select.mockReturnValue({ from: mockTx.from });
+    mockTx.from.mockReturnValue({ where: mockTx.where });
+    mockTx.where
+      .mockReturnValueOnce({
+        then: (resolve: any) => Promise.resolve([]).then(resolve),
+      })
+      .mockReturnValueOnce({
+        then: (resolve: any) =>
+          Promise.resolve([{ id: 'p1' }, { id: 'p2' }]).then(resolve),
+      });
     mockTx.delete.mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
     mockTx.insert.mockReturnValue({ values: jest.fn().mockResolvedValue(undefined) });
 
@@ -124,17 +158,48 @@ describe('RoleService', () => {
   });
 
   describe('assignPermissions', () => {
+    it('throws when a permission ID does not exist', async () => {
+      const roleId = '11111111-1111-1111-1111-111111111111';
+
+      mockDb.limit.mockResolvedValue([{ id: roleId }]);
+      mockDb.transaction.mockImplementation(async (fn: any) => fn(mockTx));
+
+      mockTx.select.mockReturnValue({ from: mockTx.from });
+      mockTx.from.mockReturnValue({ where: mockTx.where });
+      mockTx.where
+        .mockReturnValueOnce({
+          then: (resolve: any) => Promise.resolve([{ permissionId: 'old' }]).then(resolve),
+        })
+        .mockReturnValueOnce({
+          then: (resolve: any) => Promise.resolve([{ id: 'valid-only' }]).then(resolve),
+        });
+
+      await expect(
+        service.assignPermissions(roleId, { permissionIds: ['valid-only', 'missing-id'] }),
+      ).rejects.toThrow(NotFoundException);
+
+      expect(mockTx.delete).not.toHaveBeenCalled();
+    });
+
     it('logs audit once with diff metadata and actorUserId', async () => {
       const roleId = '11111111-1111-1111-1111-111111111111';
       const actorId = '22222222-2222-2222-2222-222222222222';
 
-      mockDb.query.roles.findFirst.mockResolvedValue({ id: roleId, name: 'Editor' });
+      mockDb.limit.mockResolvedValue([{ id: roleId }]);
       mockDb.select.mockReturnValue({ from: mockDb.from });
       mockDb.from.mockReturnValue({ where: mockDb.where });
-      mockDb.where.mockReturnValueOnce({
-        then: (resolve: any) => Promise.resolve([{ permissionId: 'aaa' }]).then(resolve),
-      });
+      mockDb.where.mockReturnValueOnce({ limit: mockDb.limit });
       mockDb.transaction.mockImplementation(async (fn: any) => fn(mockTx));
+
+      mockTx.select.mockReturnValue({ from: mockTx.from });
+      mockTx.from.mockReturnValue({ where: mockTx.where });
+      mockTx.where
+        .mockReturnValueOnce({
+          then: (resolve: any) => Promise.resolve([{ permissionId: 'aaa' }]).then(resolve),
+        })
+        .mockReturnValueOnce({
+          then: (resolve: any) => Promise.resolve([{ id: 'bbb' }]).then(resolve),
+        });
       mockTx.delete.mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
       mockTx.insert.mockReturnValue({
         values: jest.fn().mockResolvedValue(undefined),

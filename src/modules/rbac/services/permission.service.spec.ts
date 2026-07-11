@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException } from '@nestjs/common';
 import { PermissionService } from './permission.service';
+import { RbacService } from './rbac.service';
 import { DatabaseService } from '@/database/database.service';
 
 describe('PermissionService', () => {
@@ -31,6 +32,9 @@ describe('PermissionService', () => {
   };
 
   const mockDatabaseService = { db: mockDb };
+  const mockRbacService = {
+    invalidateRolesForPermission: jest.fn().mockResolvedValue(undefined),
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -45,6 +49,7 @@ describe('PermissionService', () => {
       providers: [
         PermissionService,
         { provide: DatabaseService, useValue: mockDatabaseService },
+        { provide: RbacService, useValue: mockRbacService },
       ],
     }).compile();
 

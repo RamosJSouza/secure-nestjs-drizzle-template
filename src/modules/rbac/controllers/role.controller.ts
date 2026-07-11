@@ -46,7 +46,7 @@ export class RoleController {
   @RequirePermissions('rbac:view')
   @ApiOperation({
     summary: 'List all roles',
-    description: 'Returns all roles with their permissions. Requires rbac:view permission.',
+    description: 'Returns all roles (without nested permissions). Use GET /roles/:id for permission details.',
   })
   @ApiOkResponse({ description: 'List of roles', type: [RoleResponseDto] })
   @ApiUnauthorizedResponse({ description: 'Authentication required' })

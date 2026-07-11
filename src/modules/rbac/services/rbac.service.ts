@@ -2,9 +2,11 @@ import { Injectable, Inject, Logger } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { ConfigService } from '@nestjs/config';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { DatabaseService } from '@/database/database.service';
 import { rolePermissions } from '@/database/schema/role-permissions.schema';
+import { permissions } from '@/database/schema/permissions.schema';
+import { features } from '@/database/schema/features.schema';
 
 @Injectable()
 export class RbacService {
@@ -18,7 +20,15 @@ export class RbacService {
     private cacheManager: Cache,
     private configService: ConfigService,
   ) {
-    this.ttl = this.configService.get<number>('RBAC_CACHE_TTL', 300000);
+    this.ttl = this.configService.get<number>('rbac.cacheTtl', 300_000);
+  }
+
+  private rolePermissionsCacheKey(roleId: string): string {
+    return `rbac:role:${roleId}:permissions`;
+  }
+
+  private async invalidateRoleCaches(roleIds: Iterable<string>): Promise<void> {
+    await Promise.all([...new Set(roleIds)].map((id) => this.invalidateRoleCache(id)));
   }
 
   async checkPermissions(roleId: string, requiredPermissions: string[]): Promise<boolean> {
@@ -28,7 +38,8 @@ export class RbacService {
 
     try {
       const userPermissions = await this.getPermissionsForRole(roleId);
-      return requiredPermissions.every((perm) => userPermissions.includes(perm));
+      const granted = new Set(userPermissions);
+      return requiredPermissions.every((perm) => granted.has(perm));
     } catch (error) {
       this.logger.error(`Critical RBAC error for role ${roleId}`, error.stack);
       return false;
@@ -36,7 +47,7 @@ export class RbacService {
   }
 
   async getPermissionsForRole(roleId: string): Promise<string[]> {
-    const cacheKey = `rbac:role:${roleId}:permissions`;
+    const cacheKey = this.rolePermissionsCacheKey(roleId);
 
     try {
       const cached = await this.cacheManager.get<string[]>(cacheKey);
@@ -45,38 +56,36 @@ export class RbacService {
       }
     } catch (error) {
       this.logger.warn(
-        `Redis cache get failed for ${cacheKey}, falling back to DB`,
+        `Cache get failed for ${cacheKey}, falling back to DB`,
         error.message,
       );
     }
 
-    if (this.pendingRequests.has(cacheKey)) {
-      return this.pendingRequests.get(cacheKey)!;
+    const pending = this.pendingRequests.get(cacheKey);
+    if (pending) {
+      return pending;
     }
 
     const fetchPromise = (async () => {
       try {
-        const rows = await this.dbService.db.query.rolePermissions.findMany({
-          with: {
-            permission: {
-              with: { feature: true },
-            },
-          },
-          where: and(
-            eq(rolePermissions.roleId, roleId),
-            eq(rolePermissions.granted, true),
-          ),
+        const rows = await this.dbService.db
+          .select({
+            permissionKey: sql<string>`${features.key} || ':' || ${permissions.action}`,
+          })
+          .from(rolePermissions)
+          .innerJoin(permissions, eq(permissions.id, rolePermissions.permissionId))
+          .innerJoin(features, eq(features.id, permissions.featureId))
+          .where(
+            and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.granted, true)),
+          );
+
+        const permissionKeys = rows.map((r) => r.permissionKey);
+
+        this.cacheManager.set(cacheKey, permissionKeys, this.ttl).catch((err) => {
+          this.logger.warn(`Cache set failed for ${cacheKey}`, err.message);
         });
 
-        const permissions = rows.map(
-          (rp) => `${rp.permission.feature.key}:${rp.permission.action}`,
-        );
-
-        this.cacheManager.set(cacheKey, permissions, this.ttl).catch((err) => {
-          this.logger.warn(`Redis cache set failed for ${cacheKey}`, err.message);
-        });
-
-        return permissions;
+        return permissionKeys;
       } finally {
         this.pendingRequests.delete(cacheKey);
       }
@@ -87,7 +96,7 @@ export class RbacService {
   }
 
   async invalidateRoleCache(roleId: string): Promise<void> {
-    const cacheKey = `rbac:role:${roleId}:permissions`;
+    const cacheKey = this.rolePermissionsCacheKey(roleId);
     this.pendingRequests.delete(cacheKey);
 
     try {
@@ -96,5 +105,24 @@ export class RbacService {
     } catch (error) {
       this.logger.error(`Failed to invalidate cache for role ${roleId}`, error.stack);
     }
+  }
+
+  async invalidateRolesForPermission(permissionId: string): Promise<void> {
+    const rows = await this.dbService.db
+      .select({ roleId: rolePermissions.roleId })
+      .from(rolePermissions)
+      .where(eq(rolePermissions.permissionId, permissionId));
+
+    await this.invalidateRoleCaches(rows.map(({ roleId }) => roleId));
+  }
+
+  async invalidateRolesForFeature(featureId: string): Promise<void> {
+    const rows = await this.dbService.db
+      .select({ roleId: rolePermissions.roleId })
+      .from(rolePermissions)
+      .innerJoin(permissions, eq(permissions.id, rolePermissions.permissionId))
+      .where(eq(permissions.featureId, featureId));
+
+    await this.invalidateRoleCaches(rows.map(({ roleId }) => roleId));
   }
 }

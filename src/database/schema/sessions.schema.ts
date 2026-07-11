@@ -1,5 +1,6 @@
 import { pgTable, uuid, text, varchar, timestamp, index } from 'drizzle-orm/pg-core';
 import { users } from './users.schema';
+import { organizations } from './organizations.schema';
 
 export const sessions = pgTable(
   'sessions',
@@ -14,6 +15,18 @@ export const sessions = pgTable(
     // Stored so that on logout/password-change we can add it to the Redis
     // revocation list and immediately invalidate the stateless access token.
     accessTokenJti: text('access_token_jti'),
+
+    // JTI of the refresh token issued at session creation. With refresh tokens
+    // now carrying a jti (VULN-01), storing it lets us revoke BOTH credentials
+    // atomically on logout/password-change/soft-delete, so a stolen refresh
+    // token can no longer be replayed as an access token after revocation.
+    refreshTokenJti: text('refresh_token_jti'),
+
+    // Tenant the session belongs to. Copied from the user at session creation
+    // so RLS / app-level scoping can isolate sessions by organization.
+    organizationId: uuid('organization_id').references(() => organizations.id, {
+      onDelete: 'set null',
+    }),
 
     // Opaque fingerprint derived from User-Agent + IP hash.
     // Used to detect sessions being used from a different device/IP.
@@ -32,7 +45,9 @@ export const sessions = pgTable(
     index('sessions_refresh_token_hash_idx').on(table.refreshTokenHash),
     index('sessions_rotated_from_session_id_idx').on(table.rotatedFromSessionId),
     index('sessions_access_token_jti_idx').on(table.accessTokenJti),
+    index('sessions_refresh_token_jti_idx').on(table.refreshTokenJti),
     index('sessions_user_id_revoked_at_idx').on(table.userId, table.revokedAt),
+    index('sessions_organization_id_idx').on(table.organizationId),
   ],
 );
 

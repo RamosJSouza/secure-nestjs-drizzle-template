@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { RoleService } from './role.service';
 import { RbacService } from './rbac.service';
 import { DatabaseService } from '@/database/database.service';
@@ -119,10 +119,17 @@ describe('RoleService', () => {
     mockDb.select.mockReturnValue({ from: mockDb.from });
     mockDb.from.mockReturnValue({ where: mockDb.where });
     mockDb.where.mockReturnValueOnce({ limit: mockDb.limit });
-    mockDb.where.mockReturnValueOnce({
-      then: (resolve: any) => Promise.resolve([]).then(resolve),
-    });
 
+    mockTx.select.mockReturnValue({ from: mockTx.from });
+    mockTx.from.mockReturnValue({ where: mockTx.where });
+    mockTx.where
+      .mockReturnValueOnce({
+        then: (resolve: any) => Promise.resolve([]).then(resolve),
+      })
+      .mockReturnValueOnce({
+        then: (resolve: any) =>
+          Promise.resolve([{ id: 'p1' }, { id: 'p2' }]).then(resolve),
+      });
     mockTx.delete.mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
     mockTx.insert.mockReturnValue({ values: jest.fn().mockResolvedValue(undefined) });
 
@@ -140,16 +147,46 @@ describe('RoleService', () => {
       mockDb.select.mockReturnValue({ from: mockDb.from });
       mockDb.from.mockReturnValue({ where: mockDb.where });
       mockDb.where.mockReturnValueOnce({ limit: mockDb.limit });
-      mockDb.where.mockReturnValueOnce({
-        then: (resolve: any) => Promise.resolve([]).then(resolve),
-      });
       mockDb.transaction.mockImplementation(async (fn: any) => fn(mockTx));
+
+      mockTx.select.mockReturnValue({ from: mockTx.from });
+      mockTx.from.mockReturnValue({ where: mockTx.where });
+      mockTx.where
+        .mockReturnValueOnce({
+          then: (resolve: any) => Promise.resolve([]).then(resolve),
+        })
+        .mockReturnValueOnce({
+          then: (resolve: any) => Promise.resolve([{ id: 'p1' }]).then(resolve),
+        });
       mockTx.delete.mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
       mockTx.insert.mockReturnValue({ values: jest.fn().mockResolvedValue(undefined) });
 
       await service.assignPermissions(roleId, { permissionIds: ['p1'] });
 
       expect(mockDb.query.roles.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('throws when a permission ID does not exist', async () => {
+      const roleId = '11111111-1111-1111-1111-111111111111';
+
+      mockDb.limit.mockResolvedValue([{ id: roleId }]);
+      mockDb.transaction.mockImplementation(async (fn: any) => fn(mockTx));
+
+      mockTx.select.mockReturnValue({ from: mockTx.from });
+      mockTx.from.mockReturnValue({ where: mockTx.where });
+      mockTx.where
+        .mockReturnValueOnce({
+          then: (resolve: any) => Promise.resolve([{ permissionId: 'old' }]).then(resolve),
+        })
+        .mockReturnValueOnce({
+          then: (resolve: any) => Promise.resolve([{ id: 'valid-only' }]).then(resolve),
+        });
+
+      await expect(
+        service.assignPermissions(roleId, { permissionIds: ['valid-only', 'missing-id'] }),
+      ).rejects.toThrow(NotFoundException);
+
+      expect(mockTx.delete).not.toHaveBeenCalled();
     });
 
     it('logs audit once with diff metadata and actorUserId', async () => {
@@ -160,10 +197,17 @@ describe('RoleService', () => {
       mockDb.select.mockReturnValue({ from: mockDb.from });
       mockDb.from.mockReturnValue({ where: mockDb.where });
       mockDb.where.mockReturnValueOnce({ limit: mockDb.limit });
-      mockDb.where.mockReturnValueOnce({
-        then: (resolve: any) => Promise.resolve([{ permissionId: 'aaa' }]).then(resolve),
-      });
       mockDb.transaction.mockImplementation(async (fn: any) => fn(mockTx));
+
+      mockTx.select.mockReturnValue({ from: mockTx.from });
+      mockTx.from.mockReturnValue({ where: mockTx.where });
+      mockTx.where
+        .mockReturnValueOnce({
+          then: (resolve: any) => Promise.resolve([{ permissionId: 'aaa' }]).then(resolve),
+        })
+        .mockReturnValueOnce({
+          then: (resolve: any) => Promise.resolve([{ id: 'bbb' }]).then(resolve),
+        });
       mockTx.delete.mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
       mockTx.insert.mockReturnValue({
         values: jest.fn().mockResolvedValue(undefined),

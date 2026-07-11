@@ -4,10 +4,11 @@ import {
   ConflictException,
   Logger,
 } from '@nestjs/common';
-import { eq, asc, count } from 'drizzle-orm';
+import { eq, asc, count, inArray } from 'drizzle-orm';
 import { DatabaseService } from '@/database/database.service';
 import { roles, Role } from '@/database/schema/roles.schema';
 import { rolePermissions } from '@/database/schema/role-permissions.schema';
+import { permissions } from '@/database/schema/permissions.schema';
 import { users } from '@/database/schema/users.schema';
 import { CreateRoleDto, UpdateRoleDto, AssignPermissionsDto } from '../dto/role.dto';
 import { RbacService } from './rbac.service';
@@ -147,21 +148,35 @@ export class RoleService {
   ): Promise<void> {
     await this.assertRoleExists(roleId);
 
-    // Capture current state for audit diff (V-6: RBAC change audit trail)
-    const before = await this.db
-      .select({ permissionId: rolePermissions.permissionId })
-      .from(rolePermissions)
-      .where(eq(rolePermissions.roleId, roleId));
-    const beforeIds = before.map((r) => r.permissionId);
-
-    const uniquePermissions = [...new Set(dto.permissionIds)];
+    const uniquePermissionIds = [...new Set(dto.permissionIds)];
+    let beforeIds: string[] = [];
+    let added: string[] = [];
+    let removed: string[] = [];
 
     await this.db.transaction(async (tx) => {
+      const before = await tx
+        .select({ permissionId: rolePermissions.permissionId })
+        .from(rolePermissions)
+        .where(eq(rolePermissions.roleId, roleId));
+
+      beforeIds = before.map((r) => r.permissionId);
+
+      if (uniquePermissionIds.length > 0) {
+        const valid = await tx
+          .select({ id: permissions.id })
+          .from(permissions)
+          .where(inArray(permissions.id, uniquePermissionIds));
+
+        if (valid.length !== uniquePermissionIds.length) {
+          throw new NotFoundException('One or more permission IDs were not found');
+        }
+      }
+
       await tx.delete(rolePermissions).where(eq(rolePermissions.roleId, roleId));
 
-      if (uniquePermissions.length > 0) {
+      if (uniquePermissionIds.length > 0) {
         await tx.insert(rolePermissions).values(
-          uniquePermissions.map((permissionId) => ({
+          uniquePermissionIds.map((permissionId) => ({
             roleId,
             permissionId,
             granted: true,
@@ -170,10 +185,10 @@ export class RoleService {
       }
     });
 
-    await this.rbacService.invalidateRoleCache(roleId);
+    added = uniquePermissionIds.filter((id) => !beforeIds.includes(id));
+    removed = beforeIds.filter((id) => !uniquePermissionIds.includes(id));
 
-    const added = uniquePermissions.filter((id) => !beforeIds.includes(id));
-    const removed = beforeIds.filter((id) => !uniquePermissions.includes(id));
+    await this.rbacService.invalidateRoleCache(roleId);
 
     this.logger.log(
       `Permissions updated for role ${roleId} by ${currentUserId || 'system'}: +${added.length} added, -${removed.length} removed`,
@@ -184,7 +199,7 @@ export class RoleService {
       entityType: 'Role',
       entityId: roleId,
       actorUserId: currentUserId,
-      metadata: { added, removed, total: uniquePermissions.length },
+      metadata: { added, removed, total: uniquePermissionIds.length },
     });
   }
 }

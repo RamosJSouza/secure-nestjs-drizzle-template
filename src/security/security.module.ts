@@ -14,7 +14,12 @@ import { SecurityEventService } from './events/security-event.service';
  */
 @Global()
 @Module({
-  imports: [CacheModule.register()],
+  imports: [
+    CacheModule.register({
+      ttl: 300_000, // 5 minutes
+      max: 1000,
+    }),
+  ],
   providers: [TokenRevocationService, SuspiciousActivityService, RiskEngineService, SecurityEventService],
   exports: [TokenRevocationService, SuspiciousActivityService, RiskEngineService, SecurityEventService],
 })

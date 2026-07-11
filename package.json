@@ -193,7 +193,6 @@
       "^@/(.*)$": "<rootDir>/$1",
       "^@auth/(.*)$": "<rootDir>/auth/$1",
       "^@users/(.*)$": "<rootDir>/users/$1",
-      "^@tasks/(.*)$": "<rootDir>/tasks/$1",
       "^@config/(.*)$": "<rootDir>/config/$1"
     }
   },

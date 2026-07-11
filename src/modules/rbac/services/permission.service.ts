@@ -4,12 +4,16 @@ import { DatabaseService } from '@/database/database.service';
 import { permissions, Permission } from '@/database/schema/permissions.schema';
 import { mapPostgresError } from '@/common/database/postgres-error.mapper';
 import { CreatePermissionDto, UpdatePermissionDto } from '../dto/permission.dto';
+import { RbacService } from './rbac.service';
 
 @Injectable()
 export class PermissionService {
   private readonly logger = new Logger(PermissionService.name);
 
-  constructor(private readonly dbService: DatabaseService) {}
+  constructor(
+    private readonly dbService: DatabaseService,
+    private readonly rbacService: RbacService,
+  ) {}
 
   private get db() {
     return this.dbService.db;
@@ -51,11 +55,13 @@ export class PermissionService {
       .update(permissions)
       .set({ ...dto, updatedAt: new Date() })
       .where(eq(permissions.id, id));
+    await this.rbacService.invalidateRolesForPermission(id);
     return this.findOne(id);
   }
 
   async remove(id: string): Promise<void> {
     try {
+      await this.rbacService.invalidateRolesForPermission(id);
       await this.db.delete(permissions).where(eq(permissions.id, id));
     } catch (err) {
       mapPostgresError(err, 'Cannot delete permission that is assigned to roles. Revoke it first.');

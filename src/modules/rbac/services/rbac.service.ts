@@ -97,4 +97,24 @@ export class RbacService {
       this.logger.error(`Failed to invalidate cache for role ${roleId}`, error.stack);
     }
   }
+
+  async invalidateRolesForPermission(permissionId: string): Promise<void> {
+    const rows = await this.dbService.db
+      .select({ roleId: rolePermissions.roleId })
+      .from(rolePermissions)
+      .where(eq(rolePermissions.permissionId, permissionId));
+
+    await Promise.all(rows.map((r) => this.invalidateRoleCache(r.roleId)));
+  }
+
+  async invalidateRolesForFeature(featureId: string): Promise<void> {
+    const rows = await this.dbService.db
+      .select({ roleId: rolePermissions.roleId })
+      .from(rolePermissions)
+      .innerJoin(permissions, eq(permissions.id, rolePermissions.permissionId))
+      .where(eq(permissions.featureId, featureId));
+
+    const uniqueRoleIds = [...new Set(rows.map((r) => r.roleId))];
+    await Promise.all(uniqueRoleIds.map((roleId) => this.invalidateRoleCache(roleId)));
+  }
 }

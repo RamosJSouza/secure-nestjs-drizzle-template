@@ -4,12 +4,16 @@ import { DatabaseService } from '@/database/database.service';
 import { features, Feature } from '@/database/schema/features.schema';
 import { mapPostgresError } from '@/common/database/postgres-error.mapper';
 import { CreateFeatureDto, UpdateFeatureDto, QueryFeatureDto } from '../dto/feature.dto';
+import { RbacService } from './rbac.service';
 
 @Injectable()
 export class FeatureService {
   private readonly logger = new Logger(FeatureService.name);
 
-  constructor(private readonly dbService: DatabaseService) {}
+  constructor(
+    private readonly dbService: DatabaseService,
+    private readonly rbacService: RbacService,
+  ) {}
 
   private get db() {
     return this.dbService.db;
@@ -79,11 +83,13 @@ export class FeatureService {
       throw new NotFoundException(`Feature ${id} not found`);
     }
 
+    await this.rbacService.invalidateRolesForFeature(id);
     return this.findOne(id);
   }
 
   async remove(id: string): Promise<void> {
     try {
+      await this.rbacService.invalidateRolesForFeature(id);
       await this.db.delete(features).where(eq(features.id, id));
     } catch (err) {
       mapPostgresError(err, 'Cannot delete feature with existing permissions assigned to roles');

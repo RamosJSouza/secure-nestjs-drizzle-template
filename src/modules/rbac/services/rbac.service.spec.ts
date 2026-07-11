@@ -105,4 +105,22 @@ describe('RbacService', () => {
       expect(mockCacheManager.del).toHaveBeenCalledWith('rbac:role:role-123:permissions');
     });
   });
+
+  describe('invalidateRolesForPermission', () => {
+    it('invalidates cache for each role linked to the permission', async () => {
+      const mockSelect = jest.fn().mockReturnValue({
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockResolvedValue([{ roleId: 'role-a' }, { roleId: 'role-b' }]),
+        }),
+      });
+      (mockDatabaseService as any).db.select = mockSelect;
+
+      const delSpy = jest.spyOn(mockCacheManager, 'del');
+
+      await service.invalidateRolesForPermission('perm-1');
+
+      expect(delSpy).toHaveBeenCalledWith('rbac:role:role-a:permissions');
+      expect(delSpy).toHaveBeenCalledWith('rbac:role:role-b:permissions');
+    });
+  });
 });

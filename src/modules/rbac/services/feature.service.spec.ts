@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { FeatureService } from './feature.service';
+import { RbacService } from './rbac.service';
 import { DatabaseService } from '@/database/database.service';
 
 describe('FeatureService', () => {
@@ -38,6 +39,9 @@ describe('FeatureService', () => {
   };
 
   const mockDatabaseService = { db: mockDb };
+  const mockRbacService = {
+    invalidateRolesForFeature: jest.fn().mockResolvedValue(undefined),
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -54,6 +58,7 @@ describe('FeatureService', () => {
       providers: [
         FeatureService,
         { provide: DatabaseService, useValue: mockDatabaseService },
+        { provide: RbacService, useValue: mockRbacService },
       ],
     }).compile();
 

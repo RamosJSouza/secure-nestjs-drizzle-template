@@ -1,12 +1,8 @@
-import {
-  Injectable,
-  NotFoundException,
-  ConflictException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { eq, ilike, or, and, desc, count } from 'drizzle-orm';
 import { DatabaseService } from '@/database/database.service';
 import { features, Feature } from '@/database/schema/features.schema';
+import { mapPostgresError } from '@/common/database/postgres-error.mapper';
 import { CreateFeatureDto, UpdateFeatureDto, QueryFeatureDto } from '../dto/feature.dto';
 
 @Injectable()
@@ -25,10 +21,7 @@ export class FeatureService {
       const [feature] = await this.db.insert(features).values(dto).returning();
       return feature;
     } catch (err) {
-      if (err.code === '23505') {
-        throw new ConflictException(`Feature with key "${dto.key}" already exists`);
-      }
-      throw err;
+      mapPostgresError(err, `Feature with key "${dto.key}" already exists`);
     }
   }
 
@@ -39,9 +32,7 @@ export class FeatureService {
     const conditions = [];
 
     if (search) {
-      conditions.push(
-        or(ilike(features.name, `%${search}%`), ilike(features.key, `%${search}%`)),
-      );
+      conditions.push(or(ilike(features.name, `%${search}%`), ilike(features.key, `%${search}%`)));
     }
 
     if (isActive !== undefined) {
@@ -95,12 +86,7 @@ export class FeatureService {
     try {
       await this.db.delete(features).where(eq(features.id, id));
     } catch (err) {
-      if (err.code === '23503') {
-        throw new ConflictException(
-          'Cannot delete feature with existing permissions assigned to roles',
-        );
-      }
-      throw err;
+      mapPostgresError(err, 'Cannot delete feature with existing permissions assigned to roles');
     }
   }
 }

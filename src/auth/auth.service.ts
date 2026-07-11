@@ -108,9 +108,7 @@ export class AuthService {
     jtis: { accessTokenJti: string | null; refreshTokenJti: string | null }[],
     failClosed = false,
   ): Promise<void> {
-    const all = jtis.flatMap((s) => [s.accessTokenJti, s.refreshTokenJti]).filter((j): j is string => !!j);
-    if (all.length === 0) return;
-    await this.tokenRevocationService.revokeMany(all, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS, failClosed);
+    await this.tokenRevocationService.revokeSessionJtis(jtis, failClosed);
   }
 
   private async revokeSessionFamilyAndLogReuse(reusedSession: Session, ip?: string, userAgent?: string): Promise<void> {

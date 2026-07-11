@@ -76,8 +76,16 @@ describe('AuthService', () => {
   const mockTokenRevocationService = {
     revokeToken: jest.fn().mockResolvedValue(undefined),
     revokeMany: jest.fn().mockResolvedValue(undefined),
+    revokeSessionJtis: jest.fn(
+      async (sessions: { accessTokenJti: string | null; refreshTokenJti: string | null }[], failClosed = false): Promise<void> => {
+        const jtis = sessions.flatMap((s) => [s.accessTokenJti, s.refreshTokenJti]).filter((j): j is string => !!j);
+        if (jtis.length === 0) return;
+        await mockTokenRevocationService.revokeMany(jtis, mockTokenRevocationService.ACCESS_TOKEN_TTL_SECONDS, failClosed);
+      },
+    ),
     isRevoked: jest.fn().mockResolvedValue(false),
     isFailClosedEnabled: jest.fn().mockReturnValue(false),
+    ACCESS_TOKEN_TTL_SECONDS: 900,
   };
 
   const mockSuspiciousActivityService = {

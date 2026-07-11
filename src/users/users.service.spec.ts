@@ -36,6 +36,13 @@ describe('UsersService', () => {
 
   const mockTokenRevocationService = {
     revokeMany: jest.fn().mockResolvedValue(undefined),
+    revokeSessionJtis: jest.fn(
+      async (sessions: { accessTokenJti: string | null; refreshTokenJti: string | null }[], failClosed = false): Promise<void> => {
+        const jtis = sessions.flatMap((s) => [s.accessTokenJti, s.refreshTokenJti]).filter((j): j is string => !!j);
+        if (jtis.length === 0) return;
+        await mockTokenRevocationService.revokeMany(jtis, mockTokenRevocationService.ACCESS_TOKEN_TTL_SECONDS, failClosed);
+      },
+    ),
     isFailClosedEnabled: jest.fn().mockReturnValue(true),
     ACCESS_TOKEN_TTL_SECONDS: 900,
   };
@@ -150,9 +157,7 @@ describe('UsersService', () => {
 
       expect(mockDb.transaction).toHaveBeenCalled();
       expect(txMock.update).toHaveBeenCalled();
-      expect(txMock.set).toHaveBeenCalledWith(
-        expect.objectContaining({ deletedAt: expect.any(Date) }),
-      );
+      expect(txMock.set).toHaveBeenCalledWith(expect.objectContaining({ deletedAt: expect.any(Date) }));
     });
 
     it('revokes access and refresh JTIs for all active sessions', async () => {
@@ -164,17 +169,11 @@ describe('UsersService', () => {
       await service.remove('user-uuid');
 
       expect(txMock.update).toHaveBeenCalledTimes(2);
-      expect(mockTokenRevocationService.revokeMany).toHaveBeenCalledWith(
-        expect.arrayContaining(['a1', 'r1', 'r2']),
-        expect.any(Number),
-        true,
-      );
+      expect(mockTokenRevocationService.revokeMany).toHaveBeenCalledWith(expect.arrayContaining(['a1', 'r1', 'r2']), expect.any(Number), true);
     });
 
     it('rethrows when Redis revocation fails in fail-closed mode', async () => {
-      returningMock.mockResolvedValueOnce([
-        { id: 's1', accessTokenJti: 'a1', refreshTokenJti: 'r1' },
-      ]);
+      returningMock.mockResolvedValueOnce([{ id: 's1', accessTokenJti: 'a1', refreshTokenJti: 'r1' }]);
       mockTokenRevocationService.revokeMany.mockRejectedValueOnce(new Error('redis down'));
 
       await expect(service.remove('user-uuid')).rejects.toThrow('redis down');
@@ -191,9 +190,7 @@ describe('UsersService', () => {
 
       mockWhere.mockClear();
 
-      await RequestContext.run({ correlationId: 't', organizationId: 'org-123' }, () =>
-        service.findAll(),
-      );
+      await RequestContext.run({ correlationId: 't', organizationId: 'org-123' }, () => service.findAll());
 
       expect(getOrgSpy).toHaveBeenCalled();
       expect(mockWhere).toHaveBeenCalled();

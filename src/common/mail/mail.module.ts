@@ -1,18 +1,16 @@
 import { Module } from '@nestjs/common';
-import { ResendModule } from 'nest-resend';
-import { ConfigService } from '@nestjs/config';
-import { MailService } from './mail.service';
+import { ConfigModule } from '@nestjs/config';
+import { EMAIL_PROVIDER } from './ports/email-provider.port';
+import { NodemailerAdapter } from './adapters/nodemailer.adapter';
+import { MailFacade } from './mail.facade';
 
 @Module({
-    imports: [
-        ResendModule.forRootAsync({
-            inject: [ConfigService],
-            useFactory: (configService: ConfigService) => ({
-                apiKey: configService.get('RESEND_API_KEY'),
-            }),
-        }),
-    ],
-    providers: [MailService],
-    exports: [MailService],
+  imports: [ConfigModule],
+  providers: [
+    NodemailerAdapter,
+    { provide: EMAIL_PROVIDER, useExisting: NodemailerAdapter },
+    MailFacade,
+  ],
+  exports: [MailFacade],
 })
-export class MailModule { }
+export class MailModule {}

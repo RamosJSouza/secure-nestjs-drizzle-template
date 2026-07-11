@@ -47,7 +47,8 @@ This document maps each compliance requirement (SOC 2 Type II, GDPR, LGPD, PCI-D
 |-----------|---------------|---------|
 | **Integrity & Confidentiality** | Argon2id hashing (64 MiB / 3t / 4p); bcrypt migration on login | `src/users/users.service.ts` — `hashPassword()` |
 | **Data minimization** | JWT access token: `{sub, jti}` only — no email, role, PII in payload. Refresh token: `{sub}` only. Eliminates stale role claims and PII leakage via client-side decoding | `src/auth/auth.service.ts` — token generation |
-| **Accountability** | Append-only audit logs per action with `userId`, `action`, `entityType`, `entityId`, `details`, `createdAt` | `src/modules/audit/audit.service.ts` |
+| **Account recovery** | Opaque tokens (SHA-256 in Redis); anti-enumeration (always 202); burn-after-read; session revocation on reset | `src/auth/services/password-recovery.service.ts` |
+| **Email verification** | Double opt-in; `emailVerifiedAt` column; `@RequireEmailVerification()` guard | `src/auth/services/email-verification.service.ts` |
 
 ### Article 25 — Data Protection by Design
 
@@ -75,7 +76,9 @@ This document maps each compliance requirement (SOC 2 Type II, GDPR, LGPD, PCI-D
 |-----|-------------|---------------|
 | 8.2 | Unique user IDs | UUID v4 per user, never reused | Schema |
 | 8.3.6 | Minimum password complexity | Min 8 chars, max 72, uppercase + lowercase + digit | DTOs via `class-validator` |
-| 8.3.9 | Password change requires current password | `POST /auth/change-password` verifies `currentPassword` before applying change | `src/auth/auth.service.ts` |
+| 8.3.9 | Password change requires current password | `POST /auth/change-password` verifies `currentPassword`; updates `passwordChangedAt`; revokes all sessions | `src/auth/auth.service.ts` |
+| 8.3.11 | Password reset without exposing account existence | `POST /auth/forgot-password` always HTTP 202; opaque single-use tokens (SHA-256 hash only) | `src/auth/services/password-recovery.service.ts` |
+| 8.3.11 | Session invalidation on password reset | `revokeAllActiveUserSessions()` on successful reset | `src/auth/utils/revoke-user-sessions.ts` |
 | 8.6.1 | Lockout after failed attempts | 5 failed logins → 15-min lockout; `SuspiciousActivityService` counters per IP | `src/users/users.service.ts`, `src/security/detection/` |
 | 8.6.2 | Session management | Access token 15m TTL; refresh 7d; max 10 sessions/user; oldest evicted | `src/auth/auth.service.ts` |
 | 8.6.3 | MFA for non-console access | Not implemented (optional extension point) | — |

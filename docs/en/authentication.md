@@ -152,3 +152,26 @@ sequenceDiagram
 | POST | /auth/logout | Yes (Bearer) | Revoke current session |
 | POST | /auth/register | Yes + perm | Create user (users:create) |
 | POST | /auth/change-password | Yes (Bearer) | Change authenticated user password |
+| POST | /auth/forgot-password | No | Request password reset (always 202, anti-enumeration) |
+| POST | /auth/reset-password | No | Reset password with opaque token (revokes all sessions) |
+| POST | /auth/send-verification | Yes (Bearer) | Send email verification link |
+| POST | /auth/verify-email | No | Confirm email with opaque token |
+
+## Password Recovery (Opaque Tokens)
+
+Password reset uses **opaque tokens**, not JWTs:
+
+1. `POST /auth/forgot-password` — always returns `202 Accepted` with the same message whether the email exists or not. Response time is normalized (minimum delay + dummy Argon2 on miss path).
+2. A 64-char hex token is emailed; only its SHA-256 hash is stored in Redis (15-minute TTL) mapping to `userId`.
+3. `POST /auth/reset-password` — atomically consumes the token (burn-after-read), sets new Argon2id hash, updates `passwordChangedAt`, and revokes all sessions + JTIs.
+
+## Email Verification
+
+1. `POST /auth/send-verification` (authenticated) — sends verification link if `emailVerifiedAt` is null.
+2. Token stored in Redis (24h TTL) using the same opaque pattern as password reset.
+3. `POST /auth/verify-email` — sets `emailVerifiedAt`.
+4. Routes marked with `@RequireEmailVerification()` reject unverified users with HTTP 403.
+
+## Password Change Grace Period
+
+`GracePeriodGuard` blocks sensitive actions for **24 hours** after `passwordChangedAt` (configurable via `PASSWORD_CHANGE_GRACE_PERIOD_HOURS`). Demo route: `POST /users/sensitive-action` (requires JWT + verified email + grace period passed).

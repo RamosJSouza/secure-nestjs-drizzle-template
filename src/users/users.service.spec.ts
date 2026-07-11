@@ -180,6 +180,22 @@ describe('UsersService', () => {
     });
   });
 
+  describe('updatePassword', () => {
+    it('sets passwordChangedAt and updatedAt', async () => {
+      mockSet.mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
+
+      await service.updatePassword('user-1', '$argon2id$hash');
+
+      expect(mockSet).toHaveBeenCalledWith(
+        expect.objectContaining({
+          password: '$argon2id$hash',
+          passwordChangedAt: expect.any(Date),
+          updatedAt: expect.any(Date),
+        }),
+      );
+    });
+  });
+
   describe('tenant scoping', () => {
     afterEach(() => {
       jest.restoreAllMocks();

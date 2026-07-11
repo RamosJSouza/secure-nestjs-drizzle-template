@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { PasswordRecoveryService } from './services/password-recovery.service';
+import { EmailVerificationService } from './services/email-verification.service';
 import { JwtAuthGuard } from './strategy/jwt-auth.guard';
 import { PermissionGuard } from '@/common/guards/permission.guard';
 
@@ -15,14 +17,23 @@ describe('AuthController', () => {
     logout: jest.fn(),
   };
 
+  const mockPasswordRecoveryService = {
+    forgotPassword: jest.fn(),
+    resetPassword: jest.fn(),
+  };
+
+  const mockEmailVerificationService = {
+    sendVerification: jest.fn(),
+    verifyEmail: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
       providers: [
-        {
-          provide: AuthService,
-          useValue: mockAuthService,
-        },
+        { provide: AuthService, useValue: mockAuthService },
+        { provide: PasswordRecoveryService, useValue: mockPasswordRecoveryService },
+        { provide: EmailVerificationService, useValue: mockEmailVerificationService },
       ],
     })
       .overrideGuard(JwtAuthGuard)

@@ -60,6 +60,37 @@ export const validationSchema = Joi.object({
   REDIS_PASSWORD: Joi.string().optional().allow(''),
   RBAC_CACHE_TTL: Joi.number().optional().default(300000),
   DISABLE_REDIS: Joi.string().valid('true', 'false').optional().default('true'),
+
+  APP_URL: Joi.string()
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.string().uri().required(),
+      otherwise: Joi.string().uri().optional().default('http://localhost:3000'),
+    }),
+
+  SMTP_HOST: Joi.string().when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(1).required(),
+    otherwise: Joi.string().optional().allow(''),
+  }),
+  SMTP_PORT: Joi.number().optional().default(587),
+  SMTP_USER: Joi.string().when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(1).required(),
+    otherwise: Joi.string().optional().allow(''),
+  }),
+  SMTP_PASS: Joi.string().when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().min(1).required(),
+    otherwise: Joi.string().optional().allow(''),
+  }),
+  SMTP_FROM_EMAIL: Joi.string().email().optional().default('noreply@localhost'),
+  SMTP_FROM_NAME: Joi.string().optional().default('NestJS Security Pro'),
+
+  PASSWORD_RESET_TOKEN_TTL_SECONDS: Joi.number().optional().default(900),
+  EMAIL_VERIFICATION_TOKEN_TTL_SECONDS: Joi.number().optional().default(86400),
+  PASSWORD_CHANGE_GRACE_PERIOD_HOURS: Joi.number().optional().default(24),
+  FORGOT_PASSWORD_MIN_RESPONSE_MS: Joi.number().optional().default(250),
 }).options({
   allowUnknown: true,
   stripUnknown: true,

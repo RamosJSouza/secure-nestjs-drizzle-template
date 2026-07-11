@@ -46,8 +46,20 @@ No `.env`, cole o conteúdo PEM em uma linha, substituindo quebras por `\n`. Amb
 ### Guards de Segurança
 - `PERMISSION_GUARD_STRICT`: Defina como `true` para que o `PermissionGuard` falhe fechado (HTTP 403) quando `@RequirePermissions` estiver ausente. Padrão: `false` (fail-open com log WARN — permite rotas protegidas por outros meios).
 
-### E-mail (Resend)
-- `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_FROM_NAME` (opcional)
+### URL da aplicação
+- `APP_URL`: URL base para links em e-mails transacionais (reset de senha, verificação). Padrão: `http://localhost:3000`
+
+### E-mail (Nodemailer / SMTP)
+- `SMTP_HOST`, `SMTP_PORT` (padrão `587`), `SMTP_USER`, `SMTP_PASS`
+- `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME` (nome do remetente, opcional)
+- **Desenvolvimento:** sem `SMTP_HOST`, o `NodemailerAdapter` cria conta Ethereal automaticamente; URL de preview no log.
+- **Produção:** configure SMTP real; links usam `APP_URL`.
+
+### Recuperação de conta e verificação
+- `PASSWORD_RESET_TOKEN_TTL_SECONDS`: TTL do token de reset. Padrão: `900` (15 min)
+- `EMAIL_VERIFICATION_TOKEN_TTL_SECONDS`: TTL do token de verificação. Padrão: `86400` (24 h)
+- `PASSWORD_CHANGE_GRACE_PERIOD_HOURS`: Horas após troca de senha em que rotas sensíveis ficam bloqueadas. Padrão: `24`
+- `FORGOT_PASSWORD_MIN_RESPONSE_MS`: Tempo mínimo de resposta do forgot-password (mitigação de timing). Padrão: `250`
 
 ## Validação
 

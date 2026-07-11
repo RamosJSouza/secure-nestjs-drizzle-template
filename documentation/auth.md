@@ -37,6 +37,11 @@ As senhas são protegidas com **Argon2id** (64 MiB, 3 iterações, 4 threads). H
 | POST | `/auth/logout` | Bearer | Revoga sessão + JTI imediatamente |
 | POST | `/auth/register` | Bearer + `users:create` | Cria usuário (admin) |
 | POST | `/auth/change-password` | Bearer | Exige `currentPassword`; revoga todas as sessões |
+| POST | `/auth/forgot-password` | Não | Solicita reset (sempre 202, anti-enumeração) |
+| POST | `/auth/reset-password` | Não | Redefine senha com token opaco |
+| POST | `/auth/send-verification` | Bearer | Reenvia e-mail de verificação |
+| POST | `/auth/verify-email` | Não | Confirma e-mail com token opaco |
+| POST | `/users/sensitive-action` | Bearer + e-mail verificado | Demo com grace period após troca de senha |
 
 ## Fluxos resumidos
 
@@ -53,7 +58,13 @@ Rotação atômica; reutilização de token revogado → revoga família de sess
 Revoga sessão no banco e adiciona JTI ao Redis blocklist imediatamente.
 
 ### Alteração de senha
-Exige senha atual; revoga todas as sessões e JTIs ativos.
+Exige senha atual; atualiza `passwordChangedAt`; revoga todas as sessões e JTIs via `revokeAllActiveUserSessions()`.
+
+### Recuperação de senha
+Tokens opacos (nunca JWT) com hash SHA-256 em Redis; uso único; forgot-password sempre retorna 202.
+
+### Verificação de e-mail
+Double opt-in; `@RequireEmailVerification()` em rotas sensíveis; `GracePeriodGuard` após troca de senha.
 
 ## Proteções adicionais
 

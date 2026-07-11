@@ -27,8 +27,10 @@ NestJS Security Pro is a production-ready NestJS backend with a modular structur
 
 | Module | Purpose |
 |--------|---------|
-| AuthModule | Login, refresh, logout, register, change-password |
-| UsersModule | Internal user management (lockout, soft-delete, session revocation) |
+| AuthModule | Login, refresh, logout, register, change-password, forgot/reset password, email verification |
+| MailModule | Transactional email via `IEmailProvider` (Nodemailer: Ethereal dev / SMTP prod) |
+| AuthGuardsModule | `EmailVerificationGuard`, `GracePeriodGuard` (avoids circular deps with UsersModule) |
+| UsersModule | User management, lockout, soft-delete, session revocation, demo sensitive-action route |
 | OrganizationsModule | **Placeholder** — entity exists in Drizzle schema; CRUD not implemented yet |
 | HealthModule | Liveness and readiness probes |
 | GracefulShutdownModule | Clean shutdown handling |
@@ -53,8 +55,13 @@ Tenant scoping is enforced at the route level via `TenantGuard` (checks `organiz
 
 ```
 src/
-├── auth/              # Authentication flows
-├── common/            # Guards, decorators
+├── auth/              # Authentication, recovery, verification, opaque token store
+│   ├── guards/        # EmailVerificationGuard, GracePeriodGuard
+│   ├── ports/         # OpaqueTokenStorePort, IEmailProvider (via common/mail)
+│   └── services/      # PasswordRecoveryService, EmailVerificationService
+├── common/
+│   ├── guards/        # JwtAuthGuard, PermissionGuard
+│   ├── mail/          # MailModule, MailFacade, NodemailerAdapter
 ├── config/            # Environment validation (Joi)
 ├── logger/            # Pino, correlation ID middleware (PII redaction)
 ├── database/
@@ -117,7 +124,7 @@ src/
 
 | Table | Purpose |
 |-------|---------|
-| `users` | Accounts, role linkage, organization, lockout, soft-delete |
+| `users` | Accounts, role linkage, organization, lockout, soft-delete, `emailVerifiedAt`, `passwordChangedAt` |
 | `roles` | RBAC roles |
 | `features` | RBAC feature modules |
 | `permissions` | Actions per feature |
@@ -136,6 +143,7 @@ src/
 | `0001_good_jack_murdock.sql` | Access token JTI, device fingerprint, session indexes |
 | `0002_romantic_eternals.sql` | Webhooks + `organization_id` on users |
 | `0003_open_madripoor.sql` | `refresh_token_jti`, `organization_id` on sessions |
+| `0004_robust_multiple_man.sql` | `emailVerifiedAt`, `passwordChangedAt` on users |
 
 Run `npm run seed:rbac` after migrations to create features, permissions, roles (Super Admin, Manager, Viewer), and a default admin user. **Change seed credentials before any production deploy.**
 
@@ -149,6 +157,11 @@ Run `npm run seed:rbac` after migrations to create features, permissions, roles 
 | `POST /auth/logout` | Bearer | Revoke session + JTI |
 | `POST /auth/register` | Bearer + `users:create` | Admin user creation |
 | `POST /auth/change-password` | Bearer | Change password + revoke all sessions |
+| `POST /auth/forgot-password` | No | Request password reset email (always 202) |
+| `POST /auth/reset-password` | No | Reset password with opaque token |
+| `POST /auth/send-verification` | Bearer | Resend email verification (throttled) |
+| `POST /auth/verify-email` | No | Confirm email with opaque token |
+| `POST /users/sensitive-action` | Bearer + verified email + grace period | Demo protected route |
 | `GET/POST/PUT/DELETE /features` | Bearer + RBAC | Feature CRUD |
 | `GET/POST/PUT/DELETE /roles` | Bearer + RBAC | Role CRUD |
 | `POST /roles/:id/permissions` | Bearer + `rbac:assign_permissions` | Assign permissions |
@@ -162,7 +175,7 @@ Run `npm run seed:rbac` after migrations to create features, permissions, roles 
 
 | Layer | Location | Notes |
 |-------|----------|-------|
-| Unit | `src/**/*.spec.ts` | Jest, `rootDir: src` — **85 tests / 16 suites** |
+| Unit | `src/**/*.spec.ts` | Jest, `rootDir: src` — **97 tests / 21 suites** |
 | E2E | `test/*.e2e-spec.ts` | Requires PostgreSQL; includes tenant isolation scenarios |
 
 CI enforces **≥ 85% coverage** (statements, branches, functions, lines) via `.github/workflows/ci.yml`.

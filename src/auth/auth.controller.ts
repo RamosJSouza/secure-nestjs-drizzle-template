@@ -1,10 +1,15 @@
 import { Body, Controller, Post, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
 import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
+import { PasswordRecoveryService } from './services/password-recovery.service';
+import { EmailVerificationService } from './services/email-verification.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { VerifyEmailDto } from './dto/verify-email.dto';
 import {
   ApiTags,
   ApiOperation,
@@ -24,7 +29,11 @@ import { CurrentUser, ClientContext, ClientContextData } from '@/common/decorato
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(
+    private authService: AuthService,
+    private passwordRecoveryService: PasswordRecoveryService,
+    private emailVerificationService: EmailVerificationService,
+  ) {}
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -100,5 +109,39 @@ export class AuthController {
   @Auditable('user.change_password', 'User', { entityIdFromResult: 'userId' })
   async changePassword(@Body() dto: ChangePasswordDto, @CurrentUser('id') userId: string, @ClientContext() client: ClientContextData) {
     return this.authService.changePassword(userId, dto.currentPassword, dto.newPassword, client.ip, client.userAgent);
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Throttle({ auth: { ttl: 60_000, limit: 5 } })
+  @ApiOperation({ summary: 'Request password reset email' })
+  async forgotPassword(@Body() dto: ForgotPasswordDto, @ClientContext() client: ClientContextData) {
+    await this.passwordRecoveryService.forgotPassword(dto, client.ip);
+    return { message: 'If the email exists, password reset instructions were sent.' };
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ auth: { ttl: 60_000, limit: 10 } })
+  @Auditable('auth.password.reset', 'User', { entityIdFromResult: 'userId' })
+  async resetPassword(@Body() dto: ResetPasswordDto, @ClientContext() client: ClientContextData) {
+    return this.passwordRecoveryService.resetPassword(dto, client.ip);
+  }
+
+  @Post('send-verification')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Throttle({ auth: { ttl: 60_000, limit: 5 } })
+  @ApiBearerAuth()
+  async sendVerification(@CurrentUser('id') userId: string) {
+    await this.emailVerificationService.sendVerification(userId);
+    return { message: 'If eligible, a verification email was sent.' };
+  }
+
+  @Post('verify-email')
+  @HttpCode(HttpStatus.OK)
+  @Auditable('auth.email.verified', 'User', { entityIdFromResult: 'userId' })
+  async verifyEmail(@Body() dto: VerifyEmailDto) {
+    return this.emailVerificationService.verifyEmail(dto.token);
   }
 }

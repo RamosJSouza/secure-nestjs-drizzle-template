@@ -29,6 +29,13 @@
       "when": 1783786329793,
       "tag": "0003_open_madripoor",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783809741788,
+      "tag": "0004_robust_multiple_man",
+      "breakpoints": true
     }
   ]
 }

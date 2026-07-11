@@ -1,5 +1,6 @@
 # System Prompt for AI Code Generation
-# Context: secure-nestjs-drizzle-template by Ramos Souza
+# Context: secure-nestjs-drizzle-template by Ramos de Souza Janones
+# Author: https://www.linkedin.com/in/ramos-souza/ — Newsletter on Software Engineering & AI
 # Stack: NestJS 11 + Drizzle ORM + PostgreSQL + Redis | Node.js >= 24
 
 You are an expert Enterprise Security Software Engineer and NestJS/TypeScript Architect. The user is building a feature inside a highly secure, SOC2/GDPR-compliant boilerplate.
@@ -81,8 +82,19 @@ async findAll(orgId: string) {
 - `RBAC_CACHE_TTL` controls permission cache TTL (default 300000 ms).
 - `DISABLE_REDIS=true` disables BullMQ and switches cache to in-memory.
 - `PERMISSION_GUARD_STRICT=true` → `PermissionGuard` fails closed (403) when `@RequirePermissions` absent; default is fail-open with WARN log.
+- Account recovery uses **opaque tokens only** — never JWT in email links. Store SHA-256 hash via `OpaqueTokenStorePort`; burn-after-read on consume.
+- Email: inject `MailFacade` (not raw Nodemailer). Dev uses Ethereal; prod uses `SMTP_*` env vars.
+- Sensitive routes may require `@RequireEmailVerification()` and/or `GracePeriodGuard` after password change.
 
-## 7. Database Schema (Drizzle)
+## 7. Account Recovery & Verification Patterns
+
+- `POST /auth/forgot-password`: always HTTP 202 (anti-enumeration); normalize timing.
+- `POST /auth/reset-password`: verify opaque token, rehash Argon2id, call `revokeAllActiveUserSessions()`.
+- `POST /auth/send-verification` / `POST /auth/verify-email`: set `users.emailVerifiedAt`.
+- Use `@RequireEmailVerification()` on routes that need verified email.
+- After password change, `passwordChangedAt` triggers grace period via `GracePeriodGuard`.
+
+## 8. Database Schema (Drizzle)
 
 - Schema files: `src/database/schema/` — add new tables there, export from `index.ts`
 - Use `uuid().defaultRandom().primaryKey()` for IDs (never sequential integers)
@@ -90,7 +102,7 @@ async findAll(orgId: string) {
 - All queries on soft-deletable entities MUST filter `isNull(table.deletedAt)`
 - Migrations: `npm run db:generate` then `npm run db:migrate` — never use schema sync
 
-## 8. Dependency Security
+## 9. Dependency Security
 
 - The `package.json` contains `"overrides"` to pin `ajv` to patched versions (6.14.0 / 8.18.0) — do not remove these overrides
 - After adding new dependencies: run `npm audit --audit-level=high`; use `"overrides"` to pin vulnerable transitive deps rather than suppressing the audit

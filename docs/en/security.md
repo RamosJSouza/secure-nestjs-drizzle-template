@@ -66,6 +66,37 @@ All signal detectors fail **open** (return 0 on error) — a Redis or DB outage 
 
 `POST /auth/change-password` requires the caller to provide their **current password** alongside the new one. The current password is verified before any change is made. This prevents account takeover via a stolen access token — even with a valid Bearer token, the attacker cannot change the password without knowing the current one.
 
+On success, `passwordChangedAt` is updated and all active sessions are revoked via `revokeAllActiveUserSessions()`.
+
+## Account Recovery (Opaque Tokens)
+
+Password reset never uses JWT in email links. Tokens are cryptographically random and stored as SHA-256 hashes only.
+
+| Control | Implementation |
+|---------|----------------|
+| Anti-enumeration | `POST /auth/forgot-password` always returns HTTP 202 with identical message |
+| Timing normalization | Minimum response delay + dummy Argon2 hash on miss path |
+| Token format | `randomBytes(32)` hex → SHA-256 stored in Redis/in-memory |
+| TTL | `PASSWORD_RESET_TOKEN_TTL_SECONDS` (default 15 min) |
+| Burn-after-read | Lua GET+DEL on `POST /auth/reset-password` — single use only |
+| Post-reset | Argon2id new hash; all sessions + JTIs revoked |
+
+## Email Verification
+
+Double opt-in flow for account email confirmation:
+
+| Step | Endpoint | Notes |
+|------|----------|-------|
+| Request | `POST /auth/send-verification` | Authenticated; throttled |
+| Confirm | `POST /auth/verify-email` | Public; opaque token; sets `emailVerifiedAt` |
+| Enforcement | `@RequireEmailVerification()` + `EmailVerificationGuard` | Blocks unverified users on sensitive routes |
+
+## Password Change Grace Period
+
+After a password change, `GracePeriodGuard` blocks sensitive routes for `PASSWORD_CHANGE_GRACE_PERIOD_HOURS` (default 24h), based on `users.passwordChangedAt`. Prevents immediate abuse of a freshly changed credential before the user can react to suspicious activity.
+
+Demo route: `POST /users/sensitive-action` requires JWT + verified email + grace period clear.
+
 ## Password Requirements
 
 All password DTOs (register, change-password, create-user) enforce:

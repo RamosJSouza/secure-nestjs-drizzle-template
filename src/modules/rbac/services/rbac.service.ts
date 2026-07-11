@@ -2,9 +2,11 @@ import { Injectable, Inject, Logger } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { ConfigService } from '@nestjs/config';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { DatabaseService } from '@/database/database.service';
 import { rolePermissions } from '@/database/schema/role-permissions.schema';
+import { permissions } from '@/database/schema/permissions.schema';
+import { features } from '@/database/schema/features.schema';
 
 @Injectable()
 export class RbacService {
@@ -45,7 +47,7 @@ export class RbacService {
       }
     } catch (error) {
       this.logger.warn(
-        `Redis cache get failed for ${cacheKey}, falling back to DB`,
+        `Cache get failed for ${cacheKey}, falling back to DB`,
         error.message,
       );
     }
@@ -56,27 +58,24 @@ export class RbacService {
 
     const fetchPromise = (async () => {
       try {
-        const rows = await this.dbService.db.query.rolePermissions.findMany({
-          with: {
-            permission: {
-              with: { feature: true },
-            },
-          },
-          where: and(
-            eq(rolePermissions.roleId, roleId),
-            eq(rolePermissions.granted, true),
-          ),
+        const rows = await this.dbService.db
+          .select({
+            permissionKey: sql<string>`${features.key} || ':' || ${permissions.action}`,
+          })
+          .from(rolePermissions)
+          .innerJoin(permissions, eq(permissions.id, rolePermissions.permissionId))
+          .innerJoin(features, eq(features.id, permissions.featureId))
+          .where(
+            and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.granted, true)),
+          );
+
+        const permissionKeys = rows.map((r) => r.permissionKey);
+
+        this.cacheManager.set(cacheKey, permissionKeys, this.ttl).catch((err) => {
+          this.logger.warn(`Cache set failed for ${cacheKey}`, err.message);
         });
 
-        const permissions = rows.map(
-          (rp) => `${rp.permission.feature.key}:${rp.permission.action}`,
-        );
-
-        this.cacheManager.set(cacheKey, permissions, this.ttl).catch((err) => {
-          this.logger.warn(`Redis cache set failed for ${cacheKey}`, err.message);
-        });
-
-        return permissions;
+        return permissionKeys;
       } finally {
         this.pendingRequests.delete(cacheKey);
       }

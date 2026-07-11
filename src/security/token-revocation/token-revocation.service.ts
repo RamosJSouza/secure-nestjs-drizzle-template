@@ -1,6 +1,7 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
+import { ConfigService } from '@nestjs/config';
 
 /**
  * Redis-backed JTI revocation list for access tokens.
@@ -33,7 +34,18 @@ export class TokenRevocationService {
   constructor(
     @Inject(CACHE_MANAGER)
     private readonly cacheManager: Cache,
+    private readonly configService: ConfigService,
   ) {}
+
+  /**
+   * Fail-closed only when Redis is actually in use. With DISABLE_REDIS=true
+   * (default dev), revocation is best-effort (fail-open) to avoid breaking
+   * auth flows during local development. In production (Redis available),
+   * security-critical paths (refresh rotation, soft-delete) fail closed.
+   */
+  isFailClosedEnabled(): boolean {
+    return this.configService.get<string>('DISABLE_REDIS') !== 'true';
+  }
 
   /**
    * Mark a JTI as revoked. The entry lives in Redis until the original

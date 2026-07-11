@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
-import { UnauthorizedException, ConflictException } from '@nestjs/common';
+import { UnauthorizedException, ConflictException, HttpStatus } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { UsersService } from 'src/users/users.service';
 import { AuditLogService } from '@/modules/audit/audit-log.service';
@@ -9,6 +9,7 @@ import { TokenRevocationService } from '@/security/token-revocation/token-revoca
 import { SuspiciousActivityService } from '@/security/detection/suspicious-activity.service';
 import { RiskEngineService } from '@/security/risk-engine/risk-engine.service';
 import { SecurityEventService } from '@/security/events/security-event.service';
+import { sessions } from '@/database/schema/sessions.schema';
 
 jest.mock('argon2', () => ({
   argon2id: 2,
@@ -76,6 +77,7 @@ describe('AuthService', () => {
     revokeToken: jest.fn().mockResolvedValue(undefined),
     revokeMany: jest.fn().mockResolvedValue(undefined),
     isRevoked: jest.fn().mockResolvedValue(false),
+    isFailClosedEnabled: jest.fn().mockReturnValue(false),
   };
 
   const mockSuspiciousActivityService = {
@@ -248,7 +250,11 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('access_token');
       expect(result).toHaveProperty('refresh_token');
       expect(result.email).toBe('test@example.com');
-      expect(mockTokenRevocationService.revokeToken).toHaveBeenCalled();
+      expect(mockTokenRevocationService.revokeMany).toHaveBeenCalledWith(
+        expect.arrayContaining(['old-jti', 'old-refresh-jti']),
+        expect.any(Number),
+        expect.any(Boolean),
+      );
     });
 
     it('should throw and revoke all sessions on token reuse', async () => {
@@ -291,6 +297,23 @@ describe('AuthService', () => {
       await expect(
         service.refresh({ refresh_token: 'an-access-token' }),
       ).rejects.toThrow('Invalid token type');
+    });
+
+    it('reverts the claimed session and throws 503 when JTI revocation fails (fail-closed)', async () => {
+      const failClosedSpy = jest
+        .spyOn(service['tokenRevocationService'], 'isFailClosedEnabled')
+        .mockReturnValueOnce(true);
+
+      mockUpdateReturning.mockResolvedValueOnce([claimedSession]); // claim succeeds
+      mockTokenRevocationService.revokeMany.mockRejectedValueOnce(new Error('redis down'));
+
+      await expect(
+        service.refresh({ refresh_token: 'valid-token' }),
+      ).rejects.toMatchObject({ status: HttpStatus.SERVICE_UNAVAILABLE });
+
+      // The session claim must be reverted so the client can retry with the same R.
+      expect(mockUpdate).toHaveBeenCalledWith(sessions);
+      failClosedSpy.mockRestore();
     });
     it('should throw UnauthorizedException when session is expired', async () => {
       const expiredSession = { ...claimedSession, expiresAt: pastDate };

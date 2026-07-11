@@ -362,10 +362,40 @@ export class AuthService {
 
     if (claimed.expiresAt < now) throw new UnauthorizedException('Refresh token expired');
 
-    if (claimed.accessTokenJti) {
-      this.tokenRevocationService
-        .revokeToken(claimed.accessTokenJti, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS)
-        .catch(() => undefined);
+    // Revoke the OLD session's credentials BEFORE issuing new tokens. With
+    // refresh tokens now carrying a jti (VULN-01), both the access and refresh
+    // JTIs must be revoked atomically so a stolen refresh token can't be
+    // replayed as an access token after rotation. Fail-closed (gated on Redis
+    // availability) so rotation is not reported successful until revocation is
+    // confirmed; on failure, revert the atomic claim so the client may retry.
+    const failClosed = this.tokenRevocationService.isFailClosedEnabled();
+    try {
+      await this.revokeSessionCredentials(
+        [{ accessTokenJti: claimed.accessTokenJti, refreshTokenJti: claimed.refreshTokenJti }],
+        failClosed,
+      );
+    } catch (err) {
+      this.logger.error(
+        `JTI revocation failed during refresh for user ${claimed.userId}: ${(err as Error).message}`,
+      );
+      if (failClosed) {
+        // Revert the atomic claim so the client may retry with the same refresh token.
+        // Use try/catch (NOT .catch() on the query builder): the unit-test mock for
+        // `.where()` returns a plain thenable with no `.catch` method.
+        try {
+          await this.db
+            .update(sessions)
+            .set({ revokedAt: null })
+            .where(eq(sessions.id, claimed.id));
+        } catch (revertErr) {
+          this.logger.error(`Failed to revert session claim: ${(revertErr as Error).message}`);
+        }
+        throw new HttpException(
+          'Unable to complete token rotation. Please retry.',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      // fail-open path (DISABLE_REDIS=true): log and continue — bounded by the 15m access TTL.
     }
 
     const user = await this.usersService.findById(claimed.userId);

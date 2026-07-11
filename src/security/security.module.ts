@@ -1,5 +1,5 @@
 import { Global, Module } from '@nestjs/common';
-import { CacheModule } from '@nestjs/cache-manager';
+import { AppCacheModule } from './cache/cache.module';
 import { TokenRevocationService } from './token-revocation/token-revocation.service';
 import { SuspiciousActivityService } from './detection/suspicious-activity.service';
 import { RiskEngineService } from './risk-engine/risk-engine.service';
@@ -14,12 +14,7 @@ import { SecurityEventService } from './events/security-event.service';
  */
 @Global()
 @Module({
-  imports: [
-    CacheModule.register({
-      ttl: 300_000, // 5 minutes
-      max: 1000,
-    }),
-  ],
+  imports: [AppCacheModule],
   providers: [TokenRevocationService, SuspiciousActivityService, RiskEngineService, SecurityEventService],
   exports: [TokenRevocationService, SuspiciousActivityService, RiskEngineService, SecurityEventService],
 })

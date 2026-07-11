@@ -10,6 +10,9 @@ interface iConfig {
     port: number;
     password: string | undefined;
   };
+  rbac: {
+    cacheTtl: number;
+  };
 }
 
 export default (): Partial<iConfig> => ({
@@ -23,5 +26,8 @@ export default (): Partial<iConfig> => ({
     host: process.env.REDIS_HOST || 'localhost',
     port: parseInt(process.env.REDIS_PORT || '6379', 10),
     password: process.env.REDIS_PASSWORD || undefined,
+  },
+  rbac: {
+    cacheTtl: parseInt(process.env.RBAC_CACHE_TTL || '300000', 10),
   },
 });

@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
 import { UnauthorizedException, ConflictException, HttpStatus } from '@nestjs/common';
+import * as argon2 from 'argon2';
+import * as bcryptjs from 'bcryptjs';
 import { AuthService } from './auth.service';
 import { UsersService } from '@/users/users.service';
 import { AuditLogService } from '@/modules/audit/audit-log.service';
@@ -15,6 +17,11 @@ jest.mock('argon2', () => ({
   argon2id: 2,
   hash: jest.fn().mockResolvedValue('$argon2id$v=19$mock-hash'),
   verify: jest.fn().mockResolvedValue(true),
+}));
+
+jest.mock('bcryptjs', () => ({
+  compare: jest.fn(),
+  hash: jest.fn(),
 }));
 
 describe('AuthService', () => {
@@ -166,8 +173,7 @@ describe('AuthService', () => {
 
       mockUsersService.findOne.mockResolvedValue(mockUser);
 
-      const bcryptjs = require('bcryptjs');
-      jest.spyOn(bcryptjs, 'compare').mockResolvedValue(true);
+      (bcryptjs.compare as jest.Mock).mockResolvedValue(true);
 
       const result = await service.login(loginDto);
 
@@ -192,8 +198,7 @@ describe('AuthService', () => {
     });
 
     it('should throw UnauthorizedException for invalid password', async () => {
-      const argon2 = require('argon2');
-      argon2.verify.mockResolvedValue(false);
+      jest.mocked(argon2.verify).mockResolvedValue(false);
 
       mockUsersService.findOne.mockResolvedValue({
         id: 'uuid',
@@ -357,16 +362,14 @@ describe('AuthService', () => {
     });
 
     it('should throw UnauthorizedException when currentPassword is wrong', async () => {
-      const argon2 = require('argon2');
-      argon2.verify.mockResolvedValue(false);
+      jest.mocked(argon2.verify).mockResolvedValue(false);
       mockUsersService.findOneByIdForAuth.mockResolvedValue(mockUserWithPassword);
 
       await expect(service.changePassword(USER_ID, 'wrong-current', 'New-Pass1')).rejects.toThrow(UnauthorizedException);
     });
 
     it('should change password and revoke all sessions on success', async () => {
-      const argon2 = require('argon2');
-      argon2.verify.mockResolvedValue(true);
+      jest.mocked(argon2.verify).mockResolvedValue(true);
       mockUsersService.findOneByIdForAuth.mockResolvedValue(mockUserWithPassword);
 
       const result = await service.changePassword(USER_ID, 'correct-current', 'New-Pass1');
@@ -426,8 +429,7 @@ describe('AuthService', () => {
         password: '$argon2id$mock',
         isActive: true,
       });
-      const argon2 = require('argon2');
-      argon2.verify.mockResolvedValue(true);
+      jest.mocked(argon2.verify).mockResolvedValue(true);
       mockUpdateReturning.mockResolvedValueOnce(rows);
 
       await service.changePassword('u', 'cur', 'New-Pass1');

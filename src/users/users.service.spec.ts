@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UsersService } from './users.service';
 import { DatabaseService } from '@/database/database.service';
+import { TokenRevocationService } from '@/security/token-revocation/token-revocation.service';
 
 describe('UsersService', () => {
   let service: UsersService;
@@ -32,6 +33,12 @@ describe('UsersService', () => {
     db: mockDb,
   };
 
+  const mockTokenRevocationService = {
+    revokeMany: jest.fn().mockResolvedValue(undefined),
+    isFailClosedEnabled: jest.fn().mockReturnValue(true),
+    ACCESS_TOKEN_TTL_SECONDS: 900,
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -47,6 +54,7 @@ describe('UsersService', () => {
       providers: [
         UsersService,
         { provide: DatabaseService, useValue: mockDatabaseService },
+        { provide: TokenRevocationService, useValue: mockTokenRevocationService },
       ],
     }).compile();
 
@@ -120,14 +128,74 @@ describe('UsersService', () => {
   });
 
   describe('remove', () => {
-    it('should soft delete a user by setting deletedAt', async () => {
-      const id = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
-      mockWhere.mockResolvedValue(undefined);
+    const returningMock = jest.fn();
+    const txMock = {
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnValue({ returning: returningMock }),
+    };
 
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockDb.transaction = jest.fn(async (fn: any) => fn(txMock));
+      returningMock.mockResolvedValue([]);
+      mockTokenRevocationService.revokeMany.mockResolvedValue(undefined);
+      mockTokenRevocationService.isFailClosedEnabled.mockReturnValue(true);
+    });
+
+    it('soft-deletes the user (sets deletedAt) inside a transaction', async () => {
+      const id = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
       await service.remove(id);
 
-      expect(mockUpdate).toHaveBeenCalled();
-      expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({ deletedAt: expect.any(Date) }));
+      expect(mockDb.transaction).toHaveBeenCalled();
+      expect(txMock.update).toHaveBeenCalled();
+      expect(txMock.set).toHaveBeenCalledWith(
+        expect.objectContaining({ deletedAt: expect.any(Date) }),
+      );
+    });
+  });
+
+  describe('remove (VULN-03 revocation)', () => {
+    const returningMock = jest.fn();
+    const txMock = {
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnValue({ returning: returningMock }),
+    };
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockDb.transaction = jest.fn(async (fn: any) => fn(txMock));
+      returningMock.mockResolvedValue([]);
+      mockTokenRevocationService.revokeMany.mockResolvedValue(undefined);
+      mockTokenRevocationService.isFailClosedEnabled.mockReturnValue(true);
+    });
+
+    it('revokes all active sessions AND sends both access+refresh JTIs to Redis', async () => {
+      returningMock.mockResolvedValueOnce([
+        { id: 's1', accessTokenJti: 'a1', refreshTokenJti: 'r1' },
+        { id: 's2', accessTokenJti: null, refreshTokenJti: 'r2' },
+      ]);
+
+      await service.remove('user-uuid');
+
+      expect(txMock.update).toHaveBeenCalledTimes(2); // users + sessions
+      expect(mockTokenRevocationService.revokeMany).toHaveBeenCalledWith(
+        expect.arrayContaining(['a1', 'r1', 'r2']),
+        expect.any(Number),
+        true, // failClosed
+      );
+    });
+
+    it('rolls back (rethrows) when Redis revocation fails in fail-closed mode', async () => {
+      returningMock.mockResolvedValueOnce([
+        { id: 's1', accessTokenJti: 'a1', refreshTokenJti: 'r1' },
+      ]);
+      mockTokenRevocationService.revokeMany.mockRejectedValueOnce(new Error('redis down'));
+
+      // revokeMany is awaited INSIDE the tx callback -> its rejection propagates
+      // -> drizzle rolls back the soft-delete + session revocation.
+      await expect(service.remove('user-uuid')).rejects.toThrow('redis down');
     });
   });
 });

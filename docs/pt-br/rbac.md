@@ -28,8 +28,17 @@ Associação Role ↔ Permission.
 
 ### 5. User
 Usuário do sistema.
-- **Relação:** Vinculado a uma Role (`roleId`)
-- **Entidade:** `src/modules/rbac/entities/user.entity.ts`
+- **Relação:** Vinculado a uma Role (`roleId`) e opcionalmente a uma Organization (`organizationId`)
+- **Schema:** `src/database/schema/users.schema.ts` · **Service:** `src/users/users.service.ts`
+
+## Cache de Permissões
+
+O `RbacService` armazena em cache as chaves de permissão concedidas por role no `CACHE_MANAGER` (Redis quando `DISABLE_REDIS=false`, in-memory caso contrário):
+
+- **Chave de cache:** `rbac:role:{roleId}:permissions`
+- **TTL:** variável `RBAC_CACHE_TTL` (padrão 5 minutos)
+- **Invalidação:** `RoleService.assignPermissions()` e mutações de permission/feature chamam `invalidateRoleCache`, `invalidateRolesForPermission` ou `invalidateRolesForFeature`
+- **Thundering herd:** requisições concorrentes para a mesma role compartilham uma única query ao banco via mapa interno `pendingRequests`
 
 ## Proteção de Rotas
 

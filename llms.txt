@@ -46,7 +46,12 @@ Ramos is a Full-Stack Developer and Software Architect specializing in high-avai
 
 ### RBAC (Database-driven, Zero-Hardcode)
 - Chain: Feature → Permission → RolePermission → Role → User
-- `PermissionGuard` queries DB on every request; role changes take effect immediately (no re-login)
+- `RbacModule` is `@Global()` — exports `RbacService` to all modules
+- `RbacService` caches permissions per role (`rbac:role:{roleId}:permissions`) with TTL `RBAC_CACHE_TTL` (default 5 min)
+- Cache backend: Redis via `AppCacheModule` when `DISABLE_REDIS=false`; in-memory when `DISABLE_REDIS=true`
+- Concurrent permission fetches deduplicated via internal `pendingRequests` map
+- Cache invalidated on role/permission/feature mutations
+- `PermissionGuard` queries cache/DB on every request; role changes take effect immediately (no re-login)
 - `PERMISSION_GUARD_STRICT=true` → fail-closed (403) when `@RequirePermissions` absent; default: fail-open with WARN log
 - 403 responses never expose required permission names
 - UUID path params validated with `ParseUUIDPipe` on all RBAC routes
@@ -92,8 +97,10 @@ Ramos is a Full-Stack Developer and Software Architect specializing in high-avai
 
 ## Key Architecture Decisions
 - `DatabaseModule` is `@Global()` — never import in feature modules; inject `DatabaseService` and use `.db`
+- `AppCacheModule` (in `src/security/cache/`) is `@Global()` via `SecurityModule` — provides `CACHE_MANAGER` (Redis or in-memory)
 - `SecurityModule` is `@Global()` — must appear in `AppModule.imports[]` BEFORE `AuthModule`
-- `TenantModule` is `@Global()` — must appear before `AuthModule`
+- `TenantModule` and `RbacModule` are `@Global()` — available everywhere without explicit imports
+- `OrganizationsModule` is a placeholder (empty module); org entity exists in Drizzle schema only
 - `import 'dotenv/config'` as first import in `main.ts` — ensures env vars loaded before module-level `DISABLE_REDIS` check
 - No TypeORM — Drizzle ORM only; schema in `src/database/schema/`; migrations via `drizzle-kit`
 - Fail-fast env validation via Joi (`src/config/validation.schema.ts`): production enforces PRIVATE_KEY, PUBLIC_KEY, DB_SSL=true, ALLOWED_ORIGINS
@@ -102,9 +109,10 @@ Ramos is a Full-Stack Developer and Software Architect specializing in high-avai
 - `JwtStrategy` uses `findById(sub)` — never trusts `email` or `roleId` from JWT claim
 
 ## Test Coverage
-- 65 tests passing across 10 suites (unit tests, no E2E in standard suite)
-- E2E: `test/tenant-isolation.e2e-spec.ts` — 11 scenarios for cross-tenant isolation (requires real PostgreSQL)
-- Run: `npx jest --config test/jest-e2e.json --no-coverage tenant-isolation`
+- **85 unit tests** across **16 suites** (`src/**/*.spec.ts`)
+- E2E: `test/app.e2e-spec.ts`, `test/feature.e2e-spec.ts`, `test/tenant-isolation.e2e-spec.ts` (requires real PostgreSQL)
+- CI minimum coverage: **85%** (statements, branches, functions, lines)
+- Run unit: `npm test` · E2E: `npx jest --config test/jest-e2e.json`
 
 ## Docs Structure
 - `docs/en/` — English reference docs (architecture, authentication, rbac, security, observability, configuration, compliance, deployment)

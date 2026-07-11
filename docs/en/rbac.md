@@ -28,8 +28,17 @@ Role ↔ Permission association.
 
 ### 5. User
 System user.
-- **Relation:** Linked to a Role (`roleId`)
-- **Entity:** `src/modules/rbac/entities/user.entity.ts`
+- **Relation:** Linked to a Role (`roleId`) and optionally an Organization (`organizationId`)
+- **Schema:** `src/database/schema/users.schema.ts` · **Service:** `src/users/users.service.ts`
+
+## Permission Cache
+
+`RbacService` caches granted permission keys per role in `CACHE_MANAGER` (Redis when `DISABLE_REDIS=false`, in-memory otherwise):
+
+- **Cache key:** `rbac:role:{roleId}:permissions`
+- **TTL:** `RBAC_CACHE_TTL` env var (default 5 minutes)
+- **Invalidation:** `RoleService.assignPermissions()` and permission/feature mutations call `invalidateRoleCache`, `invalidateRolesForPermission`, or `invalidateRolesForFeature`
+- **Thundering herd:** concurrent requests for the same role share a single in-flight DB query via an internal `pendingRequests` map
 
 ## Route Protection
 

@@ -79,7 +79,9 @@ Veja o exemplo completo em [`docs/examples/rbac-multi-tenant.md`](../docs/exampl
 
 ## Verificação de Permissões
 
-O `PermissionGuard` usa `RbacService` para verificar se a `Role` do usuário possui a permissão em `role_permissions` com `granted = true`. A verificação ocorre no banco a cada requisição — alterações de role têm efeito imediato sem re-login.
+O `PermissionGuard` usa `RbacService` para verificar se a `Role` do usuário possui a permissão em `role_permissions` com `granted = true`. Permissões são cacheadas por role (`RBAC_CACHE_TTL`, padrão 5 min) com invalidação automática em mutações RBAC.
+
+> **Documentação canônica:** [docs/pt-br/rbac.md](../docs/pt-br/rbac.md) · [docs/en/rbac.md](../docs/en/rbac.md)
 
 ### Modo estrito
 Defina `PERMISSION_GUARD_STRICT=true` para que o guard falhe fechado (HTTP 403) quando `@RequirePermissions` estiver ausente. Padrão: fail-open com log WARN (permite rotas protegidas por outros meios, ex: `JwtAuthGuard` apenas).

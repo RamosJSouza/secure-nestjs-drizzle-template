@@ -23,6 +23,7 @@ import { TokenRevocationService } from '@/security/token-revocation/token-revoca
 import { SuspiciousActivityService } from '@/security/detection/suspicious-activity.service';
 import { RiskEngineService } from '@/security/risk-engine/risk-engine.service';
 import { SecurityEventService } from '@/security/events/security-event.service';
+import { TOKEN_TYPE, TOKEN_ISSUER, TOKEN_AUDIENCE } from './token-types';
 
 const ACCESS_TOKEN_EXPIRES = '15m';
 const REFRESH_TOKEN_EXPIRES = '7d';
@@ -399,16 +400,23 @@ export class AuthService {
   ): Promise<{ email: string; access_token: string; refresh_token: string }> {
     await this.enforceSessionLimit(user.id, ip);
 
-    const jti = randomUUID();
+    const accessJti = randomUUID();
+    const refreshJti = randomUUID();
+
+    const commonSignOptions = {
+      algorithm: 'RS256' as const,
+      issuer: TOKEN_ISSUER,
+      audience: TOKEN_AUDIENCE,
+    };
 
     const accessToken = this.jwtService.sign(
-      { sub: user.id, jti },
-      { expiresIn: ACCESS_TOKEN_EXPIRES, algorithm: 'RS256' },
+      { sub: user.id, jti: accessJti, typ: TOKEN_TYPE.ACCESS },
+      { ...commonSignOptions, expiresIn: ACCESS_TOKEN_EXPIRES },
     );
 
     const refreshToken = this.jwtService.sign(
-      { sub: user.id },
-      { expiresIn: REFRESH_TOKEN_EXPIRES, algorithm: 'RS256' },
+      { sub: user.id, jti: refreshJti, typ: TOKEN_TYPE.REFRESH },
+      { ...commonSignOptions, expiresIn: REFRESH_TOKEN_EXPIRES },
     );
 
     const refreshTokenHash = this.hashRefreshToken(refreshToken);
@@ -418,7 +426,9 @@ export class AuthService {
     await this.db.insert(sessions).values({
       userId: user.id,
       refreshTokenHash,
-      accessTokenJti: jti,
+      accessTokenJti: accessJti,
+      refreshTokenJti: refreshJti,
+      organizationId: user.organizationId ?? null,
       deviceFingerprint: this.deviceFingerprint(userAgent, ip),
       ip: ip ?? null,
       userAgent: userAgent ?? null,

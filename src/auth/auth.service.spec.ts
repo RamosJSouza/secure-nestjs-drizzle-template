@@ -358,4 +358,44 @@ describe('AuthService', () => {
       );
     });
   });
+
+  describe('token claims (VULN-01)', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('signs access token with typ=access + jti and refresh with typ=refresh + jti', async () => {
+      const captured: Record<string, { payload: any; opts: any }> = {};
+      jest
+        .spyOn(mockJwtService, 'sign')
+        .mockImplementation((payload: any, opts: any) => {
+          const tag = opts.expiresIn === '15m' ? 'access' : 'refresh';
+          captured[tag] = { payload, opts };
+          return `mock-${tag}-token`;
+        });
+
+      mockUsersService.findOne.mockResolvedValueOnce({
+        id: 'u1',
+        email: 'v@x.com',
+        password: '$argon2id$mock',
+        isActive: true,
+        lockedUntil: null,
+      });
+
+      await service.login({ email: 'v@x.com', password: 'p' });
+
+      expect(captured.access.payload).toMatchObject({ sub: 'u1', typ: 'access' });
+      expect(captured.access.payload.jti).toEqual(expect.any(String));
+      expect(captured.access.opts).toMatchObject({
+        algorithm: 'RS256',
+        issuer: expect.any(String),
+        audience: expect.any(String),
+        expiresIn: '15m',
+      });
+
+      expect(captured.refresh.payload).toMatchObject({ sub: 'u1', typ: 'refresh' });
+      expect(captured.refresh.payload.jti).toEqual(expect.any(String));
+      expect(captured.refresh.opts.expiresIn).toBe('7d');
+    });
+  });
 });

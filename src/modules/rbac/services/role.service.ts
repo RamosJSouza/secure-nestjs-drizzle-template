@@ -60,15 +60,6 @@ export class RoleService {
 
   async findAll(): Promise<Role[]> {
     return this.db.query.roles.findMany({
-      with: {
-        rolePermissions: {
-          with: {
-            permission: {
-              with: { feature: true },
-            },
-          },
-        },
-      },
       orderBy: asc(roles.name),
     });
   }

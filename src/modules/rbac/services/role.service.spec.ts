@@ -91,6 +91,25 @@ describe('RoleService', () => {
     expect(result).toEqual({ id: '1', name: 'Admin' });
   });
 
+  it('findAll returns roles without nested rolePermissions', async () => {
+    const rolesList = [
+      { id: 'r1', name: 'Admin', isActive: true, description: null, createdAt: new Date(), updatedAt: new Date() },
+    ];
+    mockDb.query.roles.findMany.mockResolvedValue(rolesList);
+
+    const result = await service.findAll();
+
+    expect(result).toEqual(rolesList);
+    expect(mockDb.query.roles.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: expect.anything(),
+      }),
+    );
+    expect(mockDb.query.roles.findMany).toHaveBeenCalledWith(
+      expect.not.objectContaining({ with: expect.anything() }),
+    );
+  });
+
   it('should prevent creating duplicate roles', async () => {
     mockTx.select.mockReturnValue({ from: mockTx.from });
     mockTx.from.mockReturnValue({ where: mockTx.where });

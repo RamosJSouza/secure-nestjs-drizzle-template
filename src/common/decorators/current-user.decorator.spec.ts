@@ -4,7 +4,9 @@ import { CurrentUser } from './current-user.decorator';
 
 function getParamDecoratorFactory(decorator: ParameterDecorator) {
   class Host {
-    handler(@decorator _value: unknown) {}
+    handler(@decorator _value: unknown) {
+      void _value;
+    }
   }
   const args = Reflect.getMetadata(ROUTE_ARGS_METADATA, Host, 'handler');
   return args[Object.keys(args)[0]].factory;
@@ -26,5 +28,13 @@ describe('CurrentUser', () => {
       switchToHttp: () => ({ getRequest: () => ({ user: { id: 'u1' } }) }),
     } as ExecutionContext;
     expect(factory('id', ctx)).toBe('u1');
+  });
+
+  it('returns undefined when no user on request', () => {
+    const factory = getParamDecoratorFactory(CurrentUser());
+    const ctx = {
+      switchToHttp: () => ({ getRequest: () => ({}) }),
+    } as ExecutionContext;
+    expect(factory(undefined, ctx)).toBeUndefined();
   });
 });

@@ -4,6 +4,7 @@ import { DatabaseService } from '@/database/database.service';
 import { users, User } from '@/database/schema/users.schema';
 import { sessions } from '@/database/schema/sessions.schema';
 import { TokenRevocationService } from '@/security/token-revocation/token-revocation.service';
+import { RequestContext } from '@/logger/request-context';
 import { CreateUserDto } from './dto/create-user.dto';
 
 const LOCKOUT_THRESHOLD = 5;
@@ -44,10 +45,16 @@ export class UsersService {
   }
 
   async findAll(): Promise<Omit<User, 'password'>[]> {
+    const organizationId = RequestContext.getOrganizationId();
     return this.dbService.db
       .select(SAFE_FIELDS)
       .from(users)
-      .where(isNull(users.deletedAt));
+      .where(
+        and(
+          isNull(users.deletedAt),
+          organizationId ? eq(users.organizationId, organizationId) : undefined,
+        ),
+      );
   }
 
   /**

@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { UsersService } from './users.service';
 import { DatabaseService } from '@/database/database.service';
 import { TokenRevocationService } from '@/security/token-revocation/token-revocation.service';
+import { RequestContext } from '@/logger/request-context';
 
 describe('UsersService', () => {
   let service: UsersService;
@@ -196,6 +197,36 @@ describe('UsersService', () => {
       // revokeMany is awaited INSIDE the tx callback -> its rejection propagates
       // -> drizzle rolls back the soft-delete + session revocation.
       await expect(service.remove('user-uuid')).rejects.toThrow('redis down');
+    });
+  });
+
+  describe('tenant scoping (VULN-03)', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('findAll consults RequestContext.organizationId and applies a filter when present', async () => {
+      const getOrgSpy = jest.spyOn(RequestContext, 'getOrganizationId');
+
+      mockWhere.mockClear();
+
+      // With org context: findAll must read it and pass a truthy AND-condition to where().
+      await RequestContext.run({ correlationId: 't', organizationId: 'org-123' }, () =>
+        service.findAll(),
+      );
+
+      expect(getOrgSpy).toHaveBeenCalled();
+      expect(mockWhere).toHaveBeenCalled();
+      const calls = mockWhere.mock.calls;
+      const withOrgArg = calls[calls.length - 1]?.[0];
+      expect(withOrgArg).toBeTruthy(); // the `and(isNull(deletedAt), eq(org, 'org-123'))` object
+
+      // Without org context: findAll still filters by deletedAt; org filter is absent.
+      mockWhere.mockClear();
+      getOrgSpy.mockClear();
+      await RequestContext.run({ correlationId: 't' }, () => service.findAll());
+      expect(getOrgSpy).toHaveBeenCalled();
+      expect(mockWhere).toHaveBeenCalled();
     });
   });
 });

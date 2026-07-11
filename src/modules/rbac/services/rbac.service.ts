@@ -30,7 +30,8 @@ export class RbacService {
 
     try {
       const userPermissions = await this.getPermissionsForRole(roleId);
-      return requiredPermissions.every((perm) => userPermissions.includes(perm));
+      const granted = new Set(userPermissions);
+      return requiredPermissions.every((perm) => granted.has(perm));
     } catch (error) {
       this.logger.error(`Critical RBAC error for role ${roleId}`, error.stack);
       return false;

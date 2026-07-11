@@ -54,6 +54,12 @@ describe('RbacService', () => {
       expect(await service.checkPermissions('role-id', [])).toBe(false);
     });
 
+    it('returns true when all required permissions exist (Set lookup)', async () => {
+      mockCacheManager.get.mockResolvedValue(['a:1', 'b:2', 'c:3', 'd:4', 'e:5']);
+      const required = ['a:1', 'c:3', 'e:5'];
+      expect(await service.checkPermissions('role-1', required)).toBe(true);
+    });
+
     it('should return true if user has all required permissions', async () => {
       const roleId = 'role-123';
       const requiredPermissions = ['test:view', 'test:edit'];

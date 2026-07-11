@@ -217,9 +217,10 @@ describe('AuthService', () => {
       id: VALID_SESSION_ID,
       userId: USER_ID,
       accessTokenJti: 'old-jti',
+      refreshTokenJti: 'old-refresh-jti',
       rotatedFromSessionId: null,
       expiresAt: futureDate,
-      revokedAt: new Date(), 
+      revokedAt: new Date(),
     };
 
     const activeUser = {
@@ -230,7 +231,12 @@ describe('AuthService', () => {
     };
 
     beforeEach(() => {
-      mockJwtService.verify.mockReturnValue({ sub: USER_ID, exp: Math.floor(futureDate.getTime() / 1000) });
+      mockJwtService.verify.mockReturnValue({
+        sub: USER_ID,
+        jti: 'old-refresh-jti',
+        typ: 'refresh',
+        exp: Math.floor(futureDate.getTime() / 1000),
+      });
     });
 
     it('should return new token pair on successful atomic claim', async () => {
@@ -273,6 +279,18 @@ describe('AuthService', () => {
       await expect(
         service.refresh({ refresh_token: 'bad-signature-token' }),
       ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('rejects an access token (typ=access) presented as a refresh token', async () => {
+      mockJwtService.verify.mockReturnValueOnce({
+        sub: USER_ID,
+        jti: 'access-jti',
+        typ: 'access',
+        exp: Math.floor(futureDate.getTime() / 1000),
+      });
+      await expect(
+        service.refresh({ refresh_token: 'an-access-token' }),
+      ).rejects.toThrow('Invalid token type');
     });
     it('should throw UnauthorizedException when session is expired', async () => {
       const expiredSession = { ...claimedSession, expiresAt: pastDate };

@@ -313,11 +313,19 @@ export class AuthService {
   ): Promise<{ email: string; access_token: string; refresh_token: string }> {
     const token = dto.refresh_token;
 
-    let payload: { sub: string; exp: number };
+    let payload: { sub: string; jti: string; typ: string; exp: number };
     try {
-      payload = this.jwtService.verify(token, { algorithms: ['RS256'] });
+      payload = this.jwtService.verify(token, {
+        algorithms: ['RS256'],
+        issuer: TOKEN_ISSUER,
+        audience: TOKEN_AUDIENCE,
+      });
     } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    if (payload.typ !== TOKEN_TYPE.REFRESH) {
+      throw new UnauthorizedException('Invalid token type');
     }
 
     const now = new Date();

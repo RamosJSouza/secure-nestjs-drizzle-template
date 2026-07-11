@@ -16,7 +16,7 @@ import { AuditLogService } from '@/modules/audit/audit-log.service';
  */
 const IP_FAIL_THRESHOLD = 20;
 const IP_BLOCK_DURATION_S = 15 * 60; // 15 minutes
-const COUNT_WINDOW_S = 60 * 60;      // 1 hour sliding window
+const COUNT_WINDOW_S = 60 * 60; // 1 hour sliding window
 
 /**
  * Detects and blocks credential stuffing and distributed brute-force attacks.
@@ -86,7 +86,7 @@ export class SuspiciousActivityService {
   /**
    * Manually block an IP (e.g., from an admin action or external threat feed).
    */
-  async blockIp(ip: string, triggerEmail: string, failCount: number): Promise<void> {
+  async blockIp(ip: string, _triggerEmail: string, failCount: number): Promise<void> {
     try {
       await this.cacheManager.set(
         this.blockKey(ip),

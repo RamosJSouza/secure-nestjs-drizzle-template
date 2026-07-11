@@ -1,14 +1,4 @@
-import {
-  Body,
-  Controller,
-  Post,
-  HttpCode,
-  HttpStatus,
-  Req,
-  UseGuards,
-  UnauthorizedException,
-} from '@nestjs/common';
-import { Request } from 'express';
+import { Body, Controller, Post, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
 import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -29,6 +19,7 @@ import {
 import { JwtAuthGuard } from './strategy/jwt-auth.guard';
 import { PermissionGuard, RequirePermissions } from '@/common/guards/permission.guard';
 import { Auditable } from '@/modules/audit/decorators/auditable.decorator';
+import { CurrentUser, ClientContext, ClientContextData } from '@/common/decorators';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -44,10 +35,8 @@ export class AuthController {
   })
   @ApiOkResponse({ description: 'Login successful, returns access_token and refresh_token' })
   @ApiBadRequestResponse({ description: 'Invalid email or password' })
-  async login(@Body() dto: LoginDto, @Req() req: Request) {
-    const ip = req.ip ?? req.socket?.remoteAddress;
-    const userAgent = req.get('user-agent');
-    return this.authService.login(dto, ip, userAgent);
+  async login(@Body() dto: LoginDto, @ClientContext() client: ClientContextData) {
+    return this.authService.login(dto, client.ip, client.userAgent);
   }
 
   @Post('refresh')
@@ -59,10 +48,8 @@ export class AuthController {
   })
   @ApiOkResponse({ description: 'New access_token and refresh_token' })
   @ApiBadRequestResponse({ description: 'Invalid or expired refresh token' })
-  async refresh(@Body() dto: RefreshDto, @Req() req: Request) {
-    const ip = req.ip ?? req.socket?.remoteAddress;
-    const userAgent = req.get('user-agent');
-    return this.authService.refresh(dto, ip, userAgent);
+  async refresh(@Body() dto: RefreshDto, @ClientContext() client: ClientContextData) {
+    return this.authService.refresh(dto, client.ip, client.userAgent);
   }
 
   @Post('logout')
@@ -75,12 +62,7 @@ export class AuthController {
   })
   @ApiNoContentResponse({ description: 'Session revoked successfully' })
   @ApiUnauthorizedResponse({ description: 'Authentication required' })
-  async logout(
-    @Body() dto: RefreshDto,
-    @Req() req: Request & { user?: { id: string } },
-  ) {
-    const userId = req.user?.id;
-    if (!userId) throw new UnauthorizedException('User not authenticated');
+  async logout(@Body() dto: RefreshDto, @CurrentUser('id') userId: string) {
     await this.authService.logout(userId, dto.refresh_token);
   }
 
@@ -116,14 +98,7 @@ export class AuthController {
   @ApiBadRequestResponse({ description: 'Invalid password format' })
   @ApiUnauthorizedResponse({ description: 'Authentication required' })
   @Auditable('user.change_password', 'User', { entityIdFromResult: 'userId' })
-  async changePassword(
-    @Body() dto: ChangePasswordDto,
-    @Req() req: Request & { user?: { id: string } },
-  ) {
-    const userId = req.user?.id;
-    if (!userId) throw new UnauthorizedException('User not authenticated');
-    const ip = req.ip ?? req.socket?.remoteAddress;
-    const userAgent = req.get('user-agent');
-    return this.authService.changePassword(userId, dto.currentPassword, dto.newPassword, ip, userAgent);
+  async changePassword(@Body() dto: ChangePasswordDto, @CurrentUser('id') userId: string, @ClientContext() client: ClientContextData) {
+    return this.authService.changePassword(userId, dto.currentPassword, dto.newPassword, client.ip, client.userAgent);
   }
 }

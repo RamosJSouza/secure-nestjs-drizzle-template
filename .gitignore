@@ -2,6 +2,8 @@
 /dist
 /node_modules
 
+/docs/superpowers/*
+
 # Logs
 logs
 *.log

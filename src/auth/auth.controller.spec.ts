@@ -6,11 +6,13 @@ import { PermissionGuard } from '@/common/guards/permission.guard';
 
 describe('AuthController', () => {
   let controller: AuthController;
-  let authService: AuthService;
 
   const mockAuthService = {
     login: jest.fn(),
     register: jest.fn(),
+    refresh: jest.fn(),
+    changePassword: jest.fn(),
+    logout: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -23,12 +25,13 @@ describe('AuthController', () => {
         },
       ],
     })
-      .overrideGuard(JwtAuthGuard).useValue({ canActivate: () => true })
-      .overrideGuard(PermissionGuard).useValue({ canActivate: () => true })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
       .compile();
 
     controller = module.get<AuthController>(AuthController);
-    authService = module.get<AuthService>(AuthService);
   });
 
   afterEach(() => {
@@ -53,8 +56,8 @@ describe('AuthController', () => {
 
       mockAuthService.login.mockResolvedValue(authResponse);
 
-      const mockReq = { ip: '127.0.0.1', socket: {}, get: jest.fn().mockReturnValue('test-agent') } as any;
-      const result = await controller.login(loginDto, mockReq);
+      const client = { ip: '127.0.0.1', userAgent: 'test-agent' };
+      const result = await controller.login(loginDto, client as any);
 
       expect(mockAuthService.login).toHaveBeenCalledWith(loginDto, '127.0.0.1', 'test-agent');
       expect(result).toEqual(authResponse);
@@ -79,6 +82,35 @@ describe('AuthController', () => {
 
       expect(mockAuthService.register).toHaveBeenCalledWith(registerDto);
       expect(result).toEqual(authResponse);
+    });
+  });
+
+  describe('refresh', () => {
+    it('should call authService.refresh and return result', async () => {
+      const refreshDto = { refresh_token: 'rt' };
+      const client = { ip: '127.0.0.1', userAgent: 'test-agent' };
+      mockAuthService.refresh.mockResolvedValue({ access_token: 'a', refresh_token: 'r' });
+      const result = await controller.refresh(refreshDto, client as any);
+      expect(mockAuthService.refresh).toHaveBeenCalledWith(refreshDto, '127.0.0.1', 'test-agent');
+      expect(result).toEqual({ access_token: 'a', refresh_token: 'r' });
+    });
+  });
+
+  describe('logout', () => {
+    it('should call authService.logout with userId and refresh_token', async () => {
+      mockAuthService.logout.mockResolvedValue(undefined);
+      await controller.logout({ refresh_token: 'rt' }, 'u1' as any);
+      expect(mockAuthService.logout).toHaveBeenCalledWith('u1', 'rt');
+    });
+  });
+
+  describe('changePassword', () => {
+    it('passes userId, ip and userAgent to authService.changePassword', async () => {
+      mockAuthService.changePassword.mockResolvedValue({ userId: 'u1' });
+      const dto = { currentPassword: 'old', newPassword: 'NewPass123!' };
+      const client = { ip: '1.2.3.4', userAgent: 'agent' };
+      await controller.changePassword(dto, 'u1' as any, client as any);
+      expect(mockAuthService.changePassword).toHaveBeenCalledWith('u1', dto.currentPassword, dto.newPassword, '1.2.3.4', 'agent');
     });
   });
 });

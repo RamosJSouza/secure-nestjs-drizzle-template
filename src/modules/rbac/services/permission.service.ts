@@ -1,12 +1,8 @@
-import {
-  Injectable,
-  NotFoundException,
-  ConflictException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { eq, asc } from 'drizzle-orm';
 import { DatabaseService } from '@/database/database.service';
 import { permissions, Permission } from '@/database/schema/permissions.schema';
+import { mapPostgresError } from '@/common/database/postgres-error.mapper';
 import { CreatePermissionDto, UpdatePermissionDto } from '../dto/permission.dto';
 
 @Injectable()
@@ -25,10 +21,7 @@ export class PermissionService {
       const [permission] = await this.db.insert(permissions).values(dto).returning();
       return permission;
     } catch (err) {
-      if (err.code === '23505') {
-        throw new ConflictException(`Permission "${dto.action}" for this feature already exists`);
-      }
-      throw err;
+      mapPostgresError(err, `Permission "${dto.action}" for this feature already exists`);
     }
   }
 
@@ -65,12 +58,7 @@ export class PermissionService {
     try {
       await this.db.delete(permissions).where(eq(permissions.id, id));
     } catch (err) {
-      if (err.code === '23503') {
-        throw new ConflictException(
-          'Cannot delete permission that is assigned to roles. Revoke it first.',
-        );
-      }
-      throw err;
+      mapPostgresError(err, 'Cannot delete permission that is assigned to roles. Revoke it first.');
     }
   }
 }

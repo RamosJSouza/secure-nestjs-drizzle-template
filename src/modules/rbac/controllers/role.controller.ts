@@ -1,16 +1,4 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Put,
-  Delete,
-  Body,
-  Param,
-  UseGuards,
-  HttpCode,
-  HttpStatus,
-  ParseUUIDPipe,
-} from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards, HttpCode, HttpStatus, ParseUUIDPipe } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -29,6 +17,7 @@ import { CreateRoleDto, UpdateRoleDto, AssignPermissionsDto, RoleResponseDto } f
 import { JwtAuthGuard } from '@/auth/strategy/jwt-auth.guard';
 import { PermissionGuard, RequirePermissions } from '@/common/guards/permission.guard';
 import { Auditable } from '@/modules/audit/decorators/auditable.decorator';
+import { CurrentUser } from '@/common/decorators';
 
 @ApiTags('Roles')
 @ApiBearerAuth()
@@ -117,7 +106,6 @@ export class RoleController {
   @Post(':id/permissions')
   @RequirePermissions('rbac:assign_permissions')
   @HttpCode(HttpStatus.OK)
-  @Auditable('role.assign_permissions', 'Role', { entityIdParam: 0 })
   @ApiOperation({
     summary: 'Assign permissions to role',
     description: 'Replaces all permissions assigned to a role with the provided list.',
@@ -127,7 +115,7 @@ export class RoleController {
   @ApiUnauthorizedResponse({ description: 'Authentication required' })
   @ApiForbiddenResponse({ description: 'User lacks rbac:assign_permissions permission' })
   @ApiNotFoundResponse({ description: 'Role or one or more permissions not found' })
-  assignPermissions(@Param('id', ParseUUIDPipe) id: string, @Body() dto: AssignPermissionsDto) {
-    return this.roleService.assignPermissions(id, dto);
+  assignPermissions(@Param('id', ParseUUIDPipe) id: string, @Body() dto: AssignPermissionsDto, @CurrentUser('id') actorUserId: string) {
+    return this.roleService.assignPermissions(id, dto, actorUserId);
   }
 }

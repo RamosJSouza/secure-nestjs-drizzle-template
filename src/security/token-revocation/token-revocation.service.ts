@@ -68,9 +68,7 @@ export class TokenRevocationService {
    * revocation fails (refresh rotation, soft-delete). Otherwise logs and continues.
    */
   async revokeMany(jtis: string[], ttlSeconds: number, failClosed = false): Promise<void> {
-    const results = await Promise.allSettled(
-      jtis.map((jti) => this.revokeToken(jti, ttlSeconds)),
-    );
+    const results = await Promise.allSettled(jtis.map((jti) => this.revokeToken(jti, ttlSeconds)));
     const failures = results.filter((r) => r.status === 'rejected');
     if (failures.length > 0) {
       this.logger.error(`${failures.length}/${jtis.length} JTI revocations failed`);
@@ -78,6 +76,19 @@ export class TokenRevocationService {
         throw new Error(`${failures.length}/${jtis.length} JTI revocations failed (failClosed)`);
       }
     }
+  }
+
+  /**
+   * Revoke all JTIs (access + refresh) for a set of sessions. Flattens the
+   * `accessTokenJti`/`refreshTokenJti` credential fields, drops nulls, and
+   * delegates to `revokeMany` with the access-token TTL. When `failClosed`
+   * is true, throws on revocation failure (callers in transactions rely on
+   * the throw to roll back).
+   */
+  async revokeSessionJtis(sessions: { accessTokenJti: string | null; refreshTokenJti: string | null }[], failClosed = false): Promise<void> {
+    const jtis = sessions.flatMap((s) => [s.accessTokenJti, s.refreshTokenJti]).filter((j): j is string => !!j);
+    if (jtis.length === 0) return;
+    await this.revokeMany(jtis, TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS, failClosed);
   }
 
   /**
@@ -90,9 +101,7 @@ export class TokenRevocationService {
       const value = await this.cacheManager.get<string>(key);
       return value !== null && value !== undefined;
     } catch (err) {
-      this.logger.warn(
-        `JTI revocation check failed (Redis unavailable) — failing OPEN: ${(err as Error).message}`,
-      );
+      this.logger.warn(`JTI revocation check failed (Redis unavailable) — failing OPEN: ${(err as Error).message}`);
       return false; // fail OPEN: prefer availability over strict revocation during Redis outage
     }
   }

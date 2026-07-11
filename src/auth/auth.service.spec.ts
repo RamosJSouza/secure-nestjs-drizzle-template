@@ -1,8 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
 import { UnauthorizedException, ConflictException, HttpStatus } from '@nestjs/common';
+import * as argon2 from 'argon2';
+import * as bcryptjs from 'bcryptjs';
 import { AuthService } from './auth.service';
-import { UsersService } from 'src/users/users.service';
+import { UsersService } from '@/users/users.service';
 import { AuditLogService } from '@/modules/audit/audit-log.service';
 import { DatabaseService } from '@/database/database.service';
 import { TokenRevocationService } from '@/security/token-revocation/token-revocation.service';
@@ -15,6 +17,11 @@ jest.mock('argon2', () => ({
   argon2id: 2,
   hash: jest.fn().mockResolvedValue('$argon2id$v=19$mock-hash'),
   verify: jest.fn().mockResolvedValue(true),
+}));
+
+jest.mock('bcryptjs', () => ({
+  compare: jest.fn(),
+  hash: jest.fn(),
 }));
 
 describe('AuthService', () => {
@@ -76,8 +83,16 @@ describe('AuthService', () => {
   const mockTokenRevocationService = {
     revokeToken: jest.fn().mockResolvedValue(undefined),
     revokeMany: jest.fn().mockResolvedValue(undefined),
+    revokeSessionJtis: jest.fn(
+      async (sessions: { accessTokenJti: string | null; refreshTokenJti: string | null }[], failClosed = false): Promise<void> => {
+        const jtis = sessions.flatMap((s) => [s.accessTokenJti, s.refreshTokenJti]).filter((j): j is string => !!j);
+        if (jtis.length === 0) return;
+        await mockTokenRevocationService.revokeMany(jtis, mockTokenRevocationService.ACCESS_TOKEN_TTL_SECONDS, failClosed);
+      },
+    ),
     isRevoked: jest.fn().mockResolvedValue(false),
     isFailClosedEnabled: jest.fn().mockReturnValue(false),
+    ACCESS_TOKEN_TTL_SECONDS: 900,
   };
 
   const mockSuspiciousActivityService = {
@@ -158,8 +173,7 @@ describe('AuthService', () => {
 
       mockUsersService.findOne.mockResolvedValue(mockUser);
 
-      const bcryptjs = require('bcryptjs');
-      jest.spyOn(bcryptjs, 'compare').mockResolvedValue(true);
+      (bcryptjs.compare as jest.Mock).mockResolvedValue(true);
 
       const result = await service.login(loginDto);
 
@@ -169,9 +183,7 @@ describe('AuthService', () => {
 
     it('should throw UnauthorizedException for invalid user', async () => {
       mockUsersService.findOne.mockResolvedValue(null);
-      await expect(service.login({ email: 'nope@example.com', password: 'pass' })).rejects.toThrow(
-        UnauthorizedException,
-      );
+      await expect(service.login({ email: 'nope@example.com', password: 'pass' })).rejects.toThrow(UnauthorizedException);
     });
 
     it('should throw UnauthorizedException for inactive user', async () => {
@@ -182,14 +194,11 @@ describe('AuthService', () => {
         isActive: false,
         lockedUntil: null,
       });
-      await expect(service.login({ email: 'test@example.com', password: 'pass' })).rejects.toThrow(
-        UnauthorizedException,
-      );
+      await expect(service.login({ email: 'test@example.com', password: 'pass' })).rejects.toThrow(UnauthorizedException);
     });
 
     it('should throw UnauthorizedException for invalid password', async () => {
-      const argon2 = require('argon2');
-      argon2.verify.mockResolvedValue(false);
+      jest.mocked(argon2.verify).mockResolvedValue(false);
 
       mockUsersService.findOne.mockResolvedValue({
         id: 'uuid',
@@ -203,9 +212,7 @@ describe('AuthService', () => {
         lockedUntil: null,
       });
 
-      await expect(service.login({ email: 'test@example.com', password: 'wrong' })).rejects.toThrow(
-        UnauthorizedException,
-      );
+      await expect(service.login({ email: 'test@example.com', password: 'wrong' })).rejects.toThrow(UnauthorizedException);
     });
   });
 
@@ -259,22 +266,18 @@ describe('AuthService', () => {
 
     it('should throw and revoke all sessions on token reuse', async () => {
       const revokedSession = { ...claimedSession, revokedAt: new Date(Date.now() - 5000) };
-      mockUpdateReturning.mockResolvedValueOnce([]); 
-      mockLimit.mockResolvedValueOnce([revokedSession]); 
-      mockUpdateReturning.mockResolvedValueOnce([]); 
+      mockUpdateReturning.mockResolvedValueOnce([]);
+      mockLimit.mockResolvedValueOnce([revokedSession]);
+      mockUpdateReturning.mockResolvedValueOnce([]);
 
-      await expect(
-        service.refresh({ refresh_token: 'reused-token' }),
-      ).rejects.toThrow('Refresh token reuse detected');
+      await expect(service.refresh({ refresh_token: 'reused-token' })).rejects.toThrow('Refresh token reuse detected');
     });
 
     it('should throw UnauthorizedException when token is not found', async () => {
-      mockUpdateReturning.mockResolvedValueOnce([]); 
-      mockLimit.mockResolvedValueOnce([]); 
+      mockUpdateReturning.mockResolvedValueOnce([]);
+      mockLimit.mockResolvedValueOnce([]);
 
-      await expect(
-        service.refresh({ refresh_token: 'unknown-token' }),
-      ).rejects.toThrow(UnauthorizedException);
+      await expect(service.refresh({ refresh_token: 'unknown-token' })).rejects.toThrow(UnauthorizedException);
     });
 
     it('should throw UnauthorizedException when JWT signature is invalid', async () => {
@@ -282,9 +285,7 @@ describe('AuthService', () => {
         throw new Error('invalid signature');
       });
 
-      await expect(
-        service.refresh({ refresh_token: 'bad-signature-token' }),
-      ).rejects.toThrow(UnauthorizedException);
+      await expect(service.refresh({ refresh_token: 'bad-signature-token' })).rejects.toThrow(UnauthorizedException);
     });
 
     it('rejects an access token (typ=access) presented as a refresh token', async () => {
@@ -294,22 +295,16 @@ describe('AuthService', () => {
         typ: 'access',
         exp: Math.floor(futureDate.getTime() / 1000),
       });
-      await expect(
-        service.refresh({ refresh_token: 'an-access-token' }),
-      ).rejects.toThrow('Invalid token type');
+      await expect(service.refresh({ refresh_token: 'an-access-token' })).rejects.toThrow('Invalid token type');
     });
 
     it('reverts the claimed session and throws 503 when JTI revocation fails (fail-closed)', async () => {
-      const failClosedSpy = jest
-        .spyOn(service['tokenRevocationService'], 'isFailClosedEnabled')
-        .mockReturnValueOnce(true);
+      const failClosedSpy = jest.spyOn(service['tokenRevocationService'], 'isFailClosedEnabled').mockReturnValueOnce(true);
 
       mockUpdateReturning.mockResolvedValueOnce([claimedSession]); // claim succeeds
       mockTokenRevocationService.revokeMany.mockRejectedValueOnce(new Error('redis down'));
 
-      await expect(
-        service.refresh({ refresh_token: 'valid-token' }),
-      ).rejects.toMatchObject({ status: HttpStatus.SERVICE_UNAVAILABLE });
+      await expect(service.refresh({ refresh_token: 'valid-token' })).rejects.toMatchObject({ status: HttpStatus.SERVICE_UNAVAILABLE });
 
       expect(mockUpdate).toHaveBeenCalledWith(sessions);
       failClosedSpy.mockRestore();
@@ -318,18 +313,14 @@ describe('AuthService', () => {
       const expiredSession = { ...claimedSession, expiresAt: pastDate };
       mockUpdateReturning.mockResolvedValueOnce([expiredSession]);
 
-      await expect(
-        service.refresh({ refresh_token: 'expired-token' }),
-      ).rejects.toThrow(UnauthorizedException);
+      await expect(service.refresh({ refresh_token: 'expired-token' })).rejects.toThrow(UnauthorizedException);
     });
 
     it('should throw UnauthorizedException when user is inactive', async () => {
       mockUpdateReturning.mockResolvedValueOnce([claimedSession]);
       mockUsersService.findById.mockResolvedValueOnce({ ...activeUser, isActive: false });
 
-      await expect(
-        service.refresh({ refresh_token: 'inactive-user-token' }),
-      ).rejects.toThrow(UnauthorizedException);
+      await expect(service.refresh({ refresh_token: 'inactive-user-token' })).rejects.toThrow(UnauthorizedException);
     });
   });
 
@@ -351,9 +342,7 @@ describe('AuthService', () => {
 
     it('should throw ConflictException for existing user', async () => {
       mockUsersService.findOne.mockResolvedValue({ id: 'uuid', email: 'existing@example.com' });
-      await expect(
-        service.register({ email: 'existing@example.com', name: 'U', password: 'p' }),
-      ).rejects.toThrow(ConflictException);
+      await expect(service.register({ email: 'existing@example.com', name: 'U', password: 'p' })).rejects.toThrow(ConflictException);
     });
   });
 
@@ -369,33 +358,25 @@ describe('AuthService', () => {
     it('should throw UnauthorizedException when user is not found', async () => {
       mockUsersService.findOneByIdForAuth.mockResolvedValue(null);
 
-      await expect(
-        service.changePassword(USER_ID, 'current-pass', 'New-Pass1'),
-      ).rejects.toThrow(UnauthorizedException);
+      await expect(service.changePassword(USER_ID, 'current-pass', 'New-Pass1')).rejects.toThrow(UnauthorizedException);
     });
 
     it('should throw UnauthorizedException when currentPassword is wrong', async () => {
-      const argon2 = require('argon2');
-      argon2.verify.mockResolvedValue(false);
+      jest.mocked(argon2.verify).mockResolvedValue(false);
       mockUsersService.findOneByIdForAuth.mockResolvedValue(mockUserWithPassword);
 
-      await expect(
-        service.changePassword(USER_ID, 'wrong-current', 'New-Pass1'),
-      ).rejects.toThrow(UnauthorizedException);
+      await expect(service.changePassword(USER_ID, 'wrong-current', 'New-Pass1')).rejects.toThrow(UnauthorizedException);
     });
 
     it('should change password and revoke all sessions on success', async () => {
-      const argon2 = require('argon2');
-      argon2.verify.mockResolvedValue(true);
+      jest.mocked(argon2.verify).mockResolvedValue(true);
       mockUsersService.findOneByIdForAuth.mockResolvedValue(mockUserWithPassword);
 
       const result = await service.changePassword(USER_ID, 'correct-current', 'New-Pass1');
 
       expect(result).toEqual({ userId: USER_ID });
       expect(mockUsersService.updatePassword).toHaveBeenCalledWith(USER_ID, '$argon2id$v=19$mock-hash');
-      expect(mockAuditLogService.log).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'auth.password.changed', entityId: USER_ID }),
-      );
+      expect(mockAuditLogService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'auth.password.changed', entityId: USER_ID }));
     });
   });
 
@@ -406,13 +387,11 @@ describe('AuthService', () => {
 
     it('signs access token with typ=access + jti and refresh with typ=refresh + jti', async () => {
       const captured: Record<string, { payload: any; opts: any }> = {};
-      jest
-        .spyOn(mockJwtService, 'sign')
-        .mockImplementation((payload: any, opts: any) => {
-          const tag = opts.expiresIn === '15m' ? 'access' : 'refresh';
-          captured[tag] = { payload, opts };
-          return `mock-${tag}-token`;
-        });
+      jest.spyOn(mockJwtService, 'sign').mockImplementation((payload: any, opts: any) => {
+        const tag = opts.expiresIn === '15m' ? 'access' : 'refresh';
+        captured[tag] = { payload, opts };
+        return `mock-${tag}-token`;
+      });
 
       mockUsersService.findOne.mockResolvedValueOnce({
         id: 'u1',
@@ -450,8 +429,7 @@ describe('AuthService', () => {
         password: '$argon2id$mock',
         isActive: true,
       });
-      const argon2 = require('argon2');
-      argon2.verify.mockResolvedValue(true);
+      jest.mocked(argon2.verify).mockResolvedValue(true);
       mockUpdateReturning.mockResolvedValueOnce(rows);
 
       await service.changePassword('u', 'cur', 'New-Pass1');

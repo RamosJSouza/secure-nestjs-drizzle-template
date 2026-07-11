@@ -8,6 +8,7 @@ import { AuditLogService } from '@/modules/audit/audit-log.service';
 describe('RoleService', () => {
   let service: RoleService;
   let mockRbacService: any;
+  let auditLog: { log: jest.Mock };
 
   const mockTx = {
     select: jest.fn().mockReturnThis(),
@@ -44,6 +45,7 @@ describe('RoleService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     mockRbacService = { invalidateRoleCache: jest.fn() };
+    auditLog = { log: jest.fn().mockResolvedValue(undefined) };
 
     // Default chaining — where() is thenable (resolves to []) so direct `await` works
     mockDb.select.mockReturnValue({ from: mockDb.from });
@@ -61,7 +63,7 @@ describe('RoleService', () => {
         RoleService,
         { provide: DatabaseService, useValue: mockDatabaseService },
         { provide: RbacService, useValue: mockRbacService },
-        { provide: AuditLogService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
+        { provide: AuditLogService, useValue: auditLog },
       ],
     }).compile();
 
@@ -119,5 +121,41 @@ describe('RoleService', () => {
 
     await service.assignPermissions('role-1', { permissionIds: ['p1', 'p2'] });
     expect(mockRbacService.invalidateRoleCache).toHaveBeenCalledWith('role-1');
+  });
+
+  describe('assignPermissions', () => {
+    it('logs audit once with diff metadata and actorUserId', async () => {
+      const roleId = '11111111-1111-1111-1111-111111111111';
+      const actorId = '22222222-2222-2222-2222-222222222222';
+
+      mockDb.query.roles.findFirst.mockResolvedValue({ id: roleId, name: 'Editor' });
+      mockDb.select.mockReturnValue({ from: mockDb.from });
+      mockDb.from.mockReturnValue({ where: mockDb.where });
+      mockDb.where.mockReturnValueOnce({
+        then: (resolve: any) => Promise.resolve([{ permissionId: 'aaa' }]).then(resolve),
+      });
+      mockDb.transaction.mockImplementation(async (fn: any) => fn(mockTx));
+      mockTx.delete.mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) });
+      mockTx.insert.mockReturnValue({
+        values: jest.fn().mockResolvedValue(undefined),
+      });
+
+      await service.assignPermissions(roleId, { permissionIds: ['bbb'] }, actorId);
+
+      expect(auditLog.log).toHaveBeenCalledTimes(1);
+      expect(auditLog.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'rbac.role.permissions_assigned',
+          entityType: 'Role',
+          entityId: roleId,
+          actorUserId: actorId,
+          metadata: expect.objectContaining({
+            added: ['bbb'],
+            removed: ['aaa'],
+            total: 1,
+          }),
+        }),
+      );
+    });
   });
 });

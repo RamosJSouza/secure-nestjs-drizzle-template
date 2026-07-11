@@ -8,7 +8,7 @@ import { RequestContext } from '@/logger/request-context';
 import { CreateUserDto } from './dto/create-user.dto';
 
 const LOCKOUT_THRESHOLD = 5;
-const LOCKOUT_DURATION_MS = 15 * 60 * 1000; 
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 
 const SAFE_FIELDS = {
   id: users.id,
@@ -49,12 +49,7 @@ export class UsersService {
     return this.dbService.db
       .select(SAFE_FIELDS)
       .from(users)
-      .where(
-        and(
-          isNull(users.deletedAt),
-          organizationId ? eq(users.organizationId, organizationId) : undefined,
-        ),
-      );
+      .where(and(isNull(users.deletedAt), organizationId ? eq(users.organizationId, organizationId) : undefined));
   }
 
   /**
@@ -95,27 +90,19 @@ export class UsersService {
     return user;
   }
 
-  async recordFailedLogin(
-    userId: string,
-  ): Promise<{ failedLoginAttempts: number; lockedUntil: Date | null }> {
+  async recordFailedLogin(userId: string): Promise<{ failedLoginAttempts: number; lockedUntil: Date | null }> {
     return this.dbService.db.transaction(async (tx) => {
       await tx
         .update(users)
         .set({ failedLoginAttempts: sql`${users.failedLoginAttempts} + 1` })
         .where(eq(users.id, userId));
 
-      const [updated] = await tx
-        .select()
-        .from(users)
-        .where(eq(users.id, userId))
-        .limit(1);
+      const [updated] = await tx.select().from(users).where(eq(users.id, userId)).limit(1);
 
       if (!updated) throw new Error('User not found');
 
       const now = new Date();
-      const shouldLock =
-        updated.failedLoginAttempts >= LOCKOUT_THRESHOLD &&
-        (!updated.lockedUntil || updated.lockedUntil <= now);
+      const shouldLock = updated.failedLoginAttempts >= LOCKOUT_THRESHOLD && (!updated.lockedUntil || updated.lockedUntil <= now);
 
       if (shouldLock) {
         const lockedUntil = new Date(now.getTime() + LOCKOUT_DURATION_MS);
@@ -131,17 +118,11 @@ export class UsersService {
   }
 
   async resetFailedLogin(userId: string): Promise<void> {
-    await this.dbService.db
-      .update(users)
-      .set({ failedLoginAttempts: 0, lockedUntil: null })
-      .where(eq(users.id, userId));
+    await this.dbService.db.update(users).set({ failedLoginAttempts: 0, lockedUntil: null }).where(eq(users.id, userId));
   }
 
   async updatePassword(userId: string, hashedPassword: string): Promise<void> {
-    await this.dbService.db
-      .update(users)
-      .set({ password: hashedPassword })
-      .where(eq(users.id, userId));
+    await this.dbService.db.update(users).set({ password: hashedPassword }).where(eq(users.id, userId));
   }
 
   async remove(id: string): Promise<void> {
@@ -150,10 +131,7 @@ export class UsersService {
     // Soft-delete, session revocation, and Redis JTI revocation share one transaction
     // so fail-closed Redis errors roll back the soft-delete (VULN-03).
     await this.dbService.db.transaction(async (tx) => {
-      await tx
-        .update(users)
-        .set({ deletedAt: new Date(), isActive: false })
-        .where(eq(users.id, id));
+      await tx.update(users).set({ deletedAt: new Date(), isActive: false }).where(eq(users.id, id));
 
       const revoked = await tx
         .update(sessions)
@@ -165,21 +143,7 @@ export class UsersService {
           refreshTokenJti: sessions.refreshTokenJti,
         });
 
-      const jtis = revoked
-        .flatMap((s) => [s.accessTokenJti, s.refreshTokenJti])
-        .filter((j): j is string => !!j);
-
-      if (jtis.length === 0) return;
-
-      try {
-        await this.tokenRevocationService.revokeMany(
-          jtis,
-          TokenRevocationService.ACCESS_TOKEN_TTL_SECONDS,
-          failClosed,
-        );
-      } catch (err) {
-        if (failClosed) throw err;
-      }
+      await this.tokenRevocationService.revokeSessionJtis(revoked, failClosed);
     });
   }
 }

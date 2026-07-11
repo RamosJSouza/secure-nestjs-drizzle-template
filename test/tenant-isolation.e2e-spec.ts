@@ -44,7 +44,6 @@ import { CorrelationIdModule } from '@/logger/correlation-id.module';
 import { JwtStrategy } from '@/auth/strategy/jwt.strategy';
 import { WebhookEndpointsController } from '@/webhooks/webhook-endpoints.controller';
 import { WebhookEndpointsService } from '@/webhooks/webhook-endpoints.service';
-import { RequestContext } from '@/logger/request-context';
 
 import { organizations } from '@/database/schema/organizations.schema';
 import { users } from '@/database/schema/users.schema';
